@@ -1,29 +1,39 @@
 ﻿"use client";
 import { useEffect, useState } from "react";
-import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi";
-import { ronin } from "@/lib/ronin";
-import WalletPicker from "@/components/WalletPicker";
+import { useAccount, useConnect, useDisconnect, type Connector } from "wagmi";
+import { createClient } from "@/lib/supabase";
+import WalletPicker from "./WalletPicker";
 
-type Network = 2020 | 202601;
-export default function RoninConnect() {
-  const [ready, setReady] = useState(false), [open, setOpen] = useState(false);
-  const [network, setNetwork] = useState<Network>(ronin.id as Network);
-  const { address, isConnected, chainId } = useAccount();
-  const { connect, connectors, isPending, error } = useConnect();
+type Login = { address: string; userId: string };
+export default function RoninConnect({ onLogin, onLogout }: {
+  onLogin: (v: Login) => void; onLogout: () => void;
+}) {
+  const [ready, setReady] = useState(false), [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [msg, setMsg] = useState("");
+  const { address, isConnected, connector: active } = useAccount();
+  const { connectAsync, connectors, isPending, error } = useConnect();
   const { disconnect } = useDisconnect();
-  const { switchChain, error: switchError, isPending: switching } = useSwitchChain();
   useEffect(() => setReady(true), []);
-  useEffect(() => { if (isConnected) setOpen(false); }, [isConnected]);
-  if (!ready) return <div className="h-14 w-full max-w-md rounded-xl bg-slate-800" />;
-  const chooseNetwork = (id: Network) => {
-    setNetwork(id);
-    if (isConnected && chainId !== id) switchChain({ chainId: id });
-  };
+  async function login(c: Connector) {
+    setBusy(true); setMsg("");
+    try {
+      if (isConnected && active?.uid !== c.uid) throw Error("Disconnect the current wallet first.");
+      const v = isConnected ? { accounts: [address!] } : await connectAsync({ connector: c });
+      const wallet = await c.getProvider();
+      const { data, error } = await createClient().auth.signInWithWeb3({
+        chain: "ethereum", statement: "Sign in to AsaVerse.", wallet: wallet as never,
+      });
+      if (error || !data.user) throw error ?? Error("Login failed");
+      onLogin({ address: v.accounts[0], userId: data.user.id }); setOpen(false);
+    } catch (e) { setMsg(e instanceof Error ? e.message : "Login failed"); }
+    finally { setBusy(false); }
+  }
+  async function logout() { await createClient().auth.signOut(); disconnect(); onLogout(); }
+  if (!ready) return <div className="h-14 rounded-xl bg-slate-800" />;
   return <div className="w-full max-w-md space-y-3">
-    {isConnected && <p className="break-all rounded-xl border border-emerald-300/20 bg-emerald-300/5 p-4 text-sm">{address}<small className="mt-2 block text-emerald-200">{chainId === 202601 ? "Saigon Testnet" : chainId === 2020 ? "Ronin Mainnet" : `Chain ${chainId}`}</small></p>}
-    <button onClick={() => setOpen(true)} className="w-full rounded-xl bg-emerald-300 p-4 font-bold text-[#07111b] hover:bg-emerald-200">{isConnected ? "Wallet & Network" : "Connect Wallet"}</button>
-    {isConnected && <button onClick={() => disconnect()} className="w-full rounded-xl border border-white/10 p-3 text-slate-300">Disconnect</button>}
-    {(switching || switchError) && <p className="text-sm text-rose-300">{switchError?.message ?? "Switching network…"}</p>}
-    <WalletPicker open={open} onClose={() => setOpen(false)} connectors={connectors} chainId={network} onNetworkChange={chooseNetwork} onConnect={c => connect({ connector: c, chainId: network })} pending={isPending} error={error?.message} />
+    {isConnected && <p className="break-all rounded-xl border p-3 text-sm">{address}</p>}
+    <button onClick={() => { setMsg(""); setOpen(true); }} className="w-full rounded-xl bg-emerald-300 p-4 font-bold text-black">{isConnected ? "Wallet Connected" : "Connect Wallet"}</button>
+    {isConnected && <button onClick={logout} className="w-full rounded-xl border p-3">Disconnect</button>}
+    {(msg || (!isConnected && error)) && <p className="break-words text-sm text-rose-300">{msg || error?.message}</p>}
+    <WalletPicker open={open} onClose={() => setOpen(false)} connectors={connectors} onConnect={c => void login(c)} pending={busy || isPending} error={msg} />
   </div>;
 }
