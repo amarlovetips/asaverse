@@ -1,27 +1,30 @@
 ﻿"use client";
-import { useEffect,useState } from "react";
-import Link from "next/link";
+import { useEffect,useRef,useState } from "react";
 import PixelHero from "@/components/PixelHero";
 import { DEFAULT_LOOK,type CharacterLook } from "@/lib/game-types";
-
+import { drawWorld,WORLD_SIZE } from "@/lib/world-map";
 type Hero={character_name:string;level:number;xp:number;appearance:CharacterLook};
 export default function WorldScene(){
-  const [hero,H]=useState<Hero|null>(null),[pos,P]=useState({x:50,y:55});
+  const [hero,H]=useState<Hero|null>(null),canvas=useRef<HTMLCanvasElement>(null),sprite=useRef<HTMLDivElement>(null);
   useEffect(()=>{
     const raw=localStorage.getItem("asaverse.selectedCharacter");
-    if(raw){try{H(JSON.parse(raw) as Hero);}catch{localStorage.removeItem("asaverse.selectedCharacter");}}
-    const key=(e:KeyboardEvent)=>{
-      const k=e.key.toLowerCase();
-      if(!["arrowup","arrowdown","arrowleft","arrowright","w","a","s","d"].includes(k))return;
-      e.preventDefault();
-      P(p=>({x:Math.max(5,Math.min(95,p.x+(["arrowleft","a"].includes(k)?-3:["arrowright","d"].includes(k)?3:0))),y:Math.max(8,Math.min(88,p.y+(["arrowup","w"].includes(k)?-3:["arrowdown","s"].includes(k)?3:0)))}));
+    if(raw)try{H(JSON.parse(raw) as Hero);}catch{}
+    const node=canvas.current,c=node?.getContext("2d");if(!node||!c)return;
+    let x=WORLD_SIZE/2,y=WORLD_SIZE/2,last=0,frame=0,dpr=1;
+    const keys=new Set<string>();
+    const resize=()=>{dpr=Math.min(devicePixelRatio||1,2);node.width=innerWidth*dpr;node.height=innerHeight*dpr;c.setTransform(dpr,0,0,dpr,0,0);};
+    const down=(e:KeyboardEvent)=>{const k=e.key.toLowerCase();if(["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright"].includes(k)){e.preventDefault();keys.add(k);}};
+    const up=(e:KeyboardEvent)=>keys.delete(e.key.toLowerCase()),clear=()=>keys.clear();
+    const tick=(t:number)=>{const dt=last?Math.min((t-last)/1000,.05):0;last=t;
+      const dx=Number(keys.has("d")||keys.has("arrowright"))-Number(keys.has("a")||keys.has("arrowleft"));
+      const dy=Number(keys.has("s")||keys.has("arrowdown"))-Number(keys.has("w")||keys.has("arrowup")),len=Math.hypot(dx,dy)||1;
+      x=Math.max(25,Math.min(WORLD_SIZE-25,x+dx/len*220*dt));y=Math.max(25,Math.min(WORLD_SIZE-25,y+dy/len*220*dt));
+      const cam=drawWorld(c,innerWidth,innerHeight,x,y);
+      if(sprite.current){sprite.current.style.left=`${x-cam.x}px`;sprite.current.style.top=`${y-cam.y}px`;}
+      frame=requestAnimationFrame(tick);
     };
-    window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key);
+    resize();window.addEventListener("resize",resize);window.addEventListener("keydown",down);window.addEventListener("keyup",up);window.addEventListener("blur",clear);frame=requestAnimationFrame(tick);
+    return()=>{cancelAnimationFrame(frame);window.removeEventListener("resize",resize);window.removeEventListener("keydown",down);window.removeEventListener("keyup",up);window.removeEventListener("blur",clear);};
   },[]);
-  return <main className="relative h-[100dvh] overflow-hidden bg-[#091a24] text-white">
-    <header className="absolute inset-x-0 top-0 z-10 flex justify-between border-b border-white/10 bg-black/30 p-4"><div><p className="text-xs tracking-widest text-cyan-300">ASAVERSE WORLD</p><b>{hero?.character_name??"Loading hero..."}</b><p className="text-xs text-slate-300">Lv {hero?.level??1} · XP {hero?.xp??0}</p></div><Link href="/play" className="rounded-lg border px-3 py-2 text-sm">← Characters</Link></header>
-    <div className="absolute inset-0 opacity-60" style={{backgroundImage:"linear-gradient(#2b6b5540 1px,transparent 1px),linear-gradient(90deg,#2b6b5540 1px,transparent 1px)",backgroundSize:"48px 48px"}}/>
-    {hero&&<div className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center" style={{left:`${pos.x}%`,top:`${pos.y}%`}}><PixelHero look={{...DEFAULT_LOOK,...hero.appearance}} size={96}/><span className="rounded bg-black/70 px-2 text-xs">{hero.character_name}</span></div>}
-    <footer className="absolute inset-x-0 bottom-0 bg-black/40 p-4 text-center text-xs text-slate-300">MOVE: WASD / ARROW KEYS</footer>
-  </main>;
+  return <main className="fixed inset-0 overflow-hidden bg-[#07131a]"><canvas ref={canvas} className="absolute inset-0 h-full w-full"/><div ref={sprite} className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center pointer-events-none">{hero&&<PixelHero look={{...DEFAULT_LOOK,...hero.appearance}} size={110}/>}</div></main>;
 }
