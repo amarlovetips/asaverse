@@ -26,9 +26,9 @@ export default function CharacterEditor({initialName="",initialAppearance,title,
     <form onSubmit={submit} className="mx-auto flex min-h-screen max-w-6xl flex-col p-4 sm:p-7">
       <header className="flex items-center justify-between border-b border-cyan-300/30 pb-4"><h2 className="font-mono text-xl font-black tracking-widest text-cyan-300 sm:text-2xl">{title.toUpperCase()}</h2><button type="button" onClick={onClose} className="border-2 border-cyan-300 px-3 py-2 font-mono text-cyan-200">↩ BACK</button></header>
       <div className="grid flex-1 gap-5 py-5 lg:grid-cols-[.9fr_1.1fr]">
-        <section className="flex min-h-[430px] flex-col items-center justify-between border border-cyan-300/30 bg-[radial-gradient(ellipse_at_center,#123f67,#07142c_65%)] p-5">
+        <section className="flex min-h-[620px] flex-col items-center justify-between border border-cyan-300/30 bg-[radial-gradient(ellipse_at_center,#123f67,#07142c_65%)] p-5">
           <input value={name} onChange={e=>setName(e.target.value)} required minLength={3} maxLength={24} placeholder="CHARACTER NAME..." className="w-full border-b-2 border-cyan-300 bg-black/20 p-3 font-mono outline-none"/>
-          <div className="relative grid flex-1 place-items-center"><div className="absolute h-60 w-44 border-x-2 border-cyan-300/50 bg-cyan-300/5 [clip-path:polygon(30%_0,70%_0,100%_100%,0_100%)]"/><div className="absolute bottom-8 h-2 w-40 bg-cyan-300/30 blur-md"/><div className="relative z-10 animate-pulse"><PixelHero look={look} size={170}/></div></div>
+          <div className="relative flex min-h-[420px] w-full flex-1 items-end justify-center overflow-hidden pb-2"><div className="absolute h-[420px] w-[300px] border-x-2 border-cyan-300/50 bg-cyan-300/5 [clip-path:polygon(30%_0,70%_0,100%_100%,0_100%)]"/><div className="absolute bottom-8 h-2 w-64 bg-cyan-300/30 blur-md"/><div className="relative z-10"><PixelHero look={look} size={300}/></div></div>
           <button type="button" onClick={randomize} className="w-full border-2 border-cyan-300/40 bg-cyan-300/10 p-3 font-mono text-cyan-200 hover:bg-cyan-300/20">⚄ RANDOMIZE</button>
         </section>
         <section className="flex flex-col border-2 border-cyan-400 bg-[#087f98] p-3 shadow-[0_0_25px_#06b6d433] sm:p-5">
@@ -42,3 +42,4 @@ export default function CharacterEditor({initialName="",initialAppearance,title,
     </form>
   </div>;
 }
+

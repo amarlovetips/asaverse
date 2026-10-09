@@ -7,11 +7,12 @@ export type CharacterLook = {
   skinColor: string; hairColor: string; outfitColor: string; eyeColor: string;
 };
 export const DEFAULT_LOOK: CharacterLook = {
-  face: 1, hair: 2, body: 1, outfit: 1,
+  face: 1, hair: 1, body: 1, outfit: 1,
   skinColor: "#e8a77e", hairColor: "#392447",
-  outfitColor: "#19b9ad", eyeColor: "#38d9ee",
+  outfitColor: "#393744", eyeColor: "#38d9ee",
 };
 export type Character = {
   id: string; character_name: string; level: number; xp: number;
   gold_coin: number; lust_coin: number; appearance: CharacterLook | null;
 };
+

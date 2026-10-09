@@ -3,10 +3,12 @@ import { DEFAULT_LOOK, type CharacterLook } from "@/lib/game-types";
 export default function CharacterAvatar({large=false,empty=false,onCreate,look=DEFAULT_LOOK}:{
   large?:boolean;empty?:boolean;onCreate?:()=>void;look?:CharacterLook;
 }) {
-  return <div className={`relative mx-auto grid aspect-square ${large?"w-60":"w-28"} place-items-center`}>
-    <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle,#0891b833,transparent_70%)]"/>
-    <div className="absolute inset-3 rounded-full border border-dashed border-cyan-300/30"/>
-    <PixelHero look={look} size={large?150:76}/>
-    {empty&&<button type="button" onClick={onCreate} aria-label="Create character" className="absolute bottom-5 right-2 grid size-12 place-items-center rounded-full border border-cyan-200 bg-cyan-300 text-3xl text-slate-950 shadow-[0_0_25px_#22d3ee99]">+</button>}
+  return <div className={`relative mx-auto ${large?"h-[min(68vh,650px)] w-[min(70vw,480px)]":"aspect-square w-28"}`}>
+    <div className="absolute inset-0 rounded-full bg-[radial-gradient(ellipse,#0891b844,transparent_70%)]"/>
+    <div className="absolute inset-x-[15%] bottom-[8%] h-2 bg-cyan-300/40 blur-md"/>
+    <div className="absolute inset-0 flex items-end justify-center">
+      <PixelHero look={look} size={large?420:76}/>
+    </div>
+    {empty&&<button type="button" onClick={onCreate} className="absolute bottom-10 right-4 grid size-12 place-items-center rounded-full bg-cyan-300 text-3xl text-slate-950">+</button>}
   </div>;
 }
