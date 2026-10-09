@@ -6,5 +6,7 @@ import { config } from "@/lib/ronin";
 
 export function Providers({ children }: Readonly<{ children: React.ReactNode }>) {
   const [client] = useState(() => new QueryClient());
-  return <WagmiProvider config={config}><QueryClientProvider client={client}>{children}</QueryClientProvider></WagmiProvider>;
+  return <WagmiProvider config={config} reconnectOnMount={false}>
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  </WagmiProvider>;
 }
