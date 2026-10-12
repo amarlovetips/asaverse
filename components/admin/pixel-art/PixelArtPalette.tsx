@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={colors:string[];color:string;onChange:(c:string)=>void};
 export default function PixelArtPalette({colors,color,onChange}:Props){
  return <div className="grid grid-cols-4 gap-1">

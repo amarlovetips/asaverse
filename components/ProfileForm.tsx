@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState, type FormEvent, type ChangeEvent } from "react";
 import { createClient } from "@/lib/supabase";
 import type { Profile } from "@/lib/game-types";
@@ -34,4 +34,3 @@ export default function ProfileForm({ wallet, userId, onSaved }: {
     </form>
   </div>;
 }
-

@@ -1,7 +1,7 @@
-﻿export const menus = [
+export const menus = [
   { name: "Overview", icon: "⌂", items: ["Dashboard", "Activity Log"] },
   { name: "Game World", icon: "◎", items: ["World Settings", "Regions & Villages", "Teleport Points", "World Events"] },
-  { name: "Character Studio", icon: "♙", items: ["Characters", "Appearance Editor", "Walk Animations", "Character Limits"] },
+  { name: "Character Studio", icon: "♙", items: ["Characters", "GitHub Character", "Appearance Editor", "Walk Animations", "Character Limits"] },
   { name: "Map Tools", icon: "▦", items: ["Map Generator", "Map Editor", "Tiles & Objects", "Collision & Spawns"] },
   { name: "Combat & AI", icon: "⚔", items: ["Enemies", "Enemy AI", "Battle Settings", "Bosses & Dungeons"] },
   { name: "Items & Economy", icon: "◇", items: ["Items", "Equipment", "Gold Coin", "Lust Coin", "Trading & Drops"] },

@@ -1,7 +1,5 @@
 "use client";
-import { ARTBOARDS } from "./usePixelEditorState";
 type Props={name:string;setName:(v:string)=>void;size:number;setSize:(v:number)=>void;tool:string;setTool:(v:string)=>void};
-const labels:Record<string,string>={body:"Body / Skin",face:"Face / Head","facial-hair":"Facial Hair",hair:"Hair"};
 export default function PixelArtToolbar(p:Props){
  return <header className="flex flex-wrap items-center gap-2 border-b border-slate-700 bg-[#151c27] p-3">
  <div className="mr-auto"><p className="text-[10px] tracking-widest text-cyan-400">ASAVERSE / PIXEL LAB</p><h2 className="font-semibold">Character Design Studio</h2></div>

@@ -1,7 +1,7 @@
-﻿"use client";
+"use client";
 import { menus } from "./menu-config";
 
-export default function AdminSidebar({ collapsed, setCollapsed, expanded, setExpanded, mobileOpen, setMobileOpen, active, setActive, onLogout }: any) {
+export default function AdminSidebar({ collapsed, setCollapsed, expanded, setExpanded, mobileOpen, setMobileOpen, active, setActive, onLogout }: { collapsed: boolean; setCollapsed: (value: boolean) => void; expanded: string; setExpanded: (value: string) => void; mobileOpen: boolean; setMobileOpen: (value: boolean) => void; active: string; setActive: (value: string) => void; onLogout: () => void }) {
   return <>
     {mobileOpen && <button aria-label="Close menu" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-black/50 md:hidden" />}
     <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-[#303844] bg-[#191f28] transition-all md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${collapsed ? "w-20" : "w-64"}`}>

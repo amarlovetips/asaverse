@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import PixelArtGrid from "./PixelArtGrid";
 import AlignmentGuides from "./AlignmentGuides";
 
@@ -34,8 +35,7 @@ export default function PixelArtCanvas(p:Props) {
    style={{width:extent,height:extent,backgroundColor:"#252b35"}}
   >
    {p.imageUrl&&p.imageVisible&&(
-    <img
-     src={p.imageUrl}
+    <Image src={p.imageUrl} width={extent} height={extent} unoptimized
      alt="Image layer"
      draggable={false}
      onPointerDown={p.onImagePointerDown}

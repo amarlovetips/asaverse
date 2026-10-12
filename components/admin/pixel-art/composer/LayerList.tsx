@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import type { Layer } from "./useCharacterLayers";
 type Props={layers:Layer[];onMove:(id:string,k:"x"|"y",v:number)=>void;onOrder:(id:string,d:number)=>void;onRemove:(id:string)=>void};
 export default function LayerList({layers,onMove,onOrder,onRemove}:Props){

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={color:string;onChange:(c:string)=>void};
 export default function ColorPicker({color,onChange}:Props){
  return <div className="rounded-lg border border-slate-700 bg-slate-900 p-3">

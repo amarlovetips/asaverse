@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={zoom:number;setZoom:(v:number)=>void};
 export default function ZoomControls({zoom,setZoom}:Props){
  return <div className="flex items-center gap-1 text-xs">

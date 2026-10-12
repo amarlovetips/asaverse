@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={name:string;size:number;pixels:Record<string,string>;empty:string};
 export default function ExportPng({name,size,pixels}:Props){
  function exportPng(){

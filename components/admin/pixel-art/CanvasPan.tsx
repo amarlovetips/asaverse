@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useRef } from "react";
 export function useCanvasPan(){
  const active=useRef(false);

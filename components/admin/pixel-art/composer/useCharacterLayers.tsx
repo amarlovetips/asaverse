@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState } from "react";
 import { createClient } from "../../../../lib/supabase";
 export type Design={id:string;design_name:string;design_type:string;canvas_width:number;pixel_data:Record<string,string>};

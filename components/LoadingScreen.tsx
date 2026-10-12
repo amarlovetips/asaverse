@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useEffect, useState } from "react";
 
 const stars = Array.from({ length: 42 }, (_, i) => ({

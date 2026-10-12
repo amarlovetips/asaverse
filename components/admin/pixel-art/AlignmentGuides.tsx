@@ -1,4 +1,4 @@
-﻿type Props={part:string;enabled:boolean};
+type Props={part:string;enabled:boolean};
 export default function AlignmentGuides({part,enabled}:Props){
  if(!enabled)return null;
  const positions:Record<string,number>={hair:25,face:45,body:50,outfit:55};

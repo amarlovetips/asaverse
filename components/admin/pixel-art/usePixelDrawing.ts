@@ -1,6 +1,5 @@
-﻿"use client";
+"use client";
 import { useRef, useState } from "react";
-import { linePixels } from "../pixel-art-utils";
 
 type Pixels = Record<string,string>;
 export function usePixelDrawing(size:number,color:string,tool:string){
@@ -28,6 +27,5 @@ export function usePixelDrawing(size:number,color:string,tool:string){
  }
  function remember(){setHistory(h=>[...h.slice(-29),pixels]);}
  function undo(){const old=history.at(-1);if(old){setPixels(old);setHistory(h=>h.slice(0,-1));}}
- return {pixels,setPixels,history,setHistory,drawing,last,previous,paint,remember,undo};
+ return {pixels,setPixels,history,setHistory,drawing,last,previous,setDrawing:(v:boolean)=>{drawing.current=v;},setLast:(v:string)=>{last.current=v;},setPrevious:(v:[number,number]|null)=>{previous.current=v;},paint,remember,undo};
 }
-

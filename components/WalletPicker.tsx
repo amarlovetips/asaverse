@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import type { Connector } from "wagmi";
 
 type Props = {

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={colors:string[];selected:string;onSelect:(c:string)=>void};
 export default function RecentColors({colors,selected,onSelect}:Props){
  return <section className="space-y-2">

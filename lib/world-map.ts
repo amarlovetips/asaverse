@@ -1,4 +1,4 @@
-﻿export const WORLD_SIZE = 6200;
+export const WORLD_SIZE = 6200;
 type Item = { x:number;y:number;r:number;k:number };
 function random(seed:number) {
   return () => ((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={name:string;part:string;size:number;pixels:Record<string,string>;palette:string[]};
 export default function ExportDesign({name,part,size,pixels,palette}:Props){
  function exportJson(){

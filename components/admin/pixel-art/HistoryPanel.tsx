@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 type Props={count:number;onUndo:()=>void;onClear:()=>void};
 export default function HistoryPanel({count,onUndo,onClear}:Props){
  return <section className="space-y-2 rounded-lg border border-slate-700 bg-slate-900 p-3">

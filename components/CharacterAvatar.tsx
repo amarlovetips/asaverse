@@ -1,4 +1,4 @@
-﻿import PixelHero from "./PixelHero";
+import PixelHero from "./PixelHero";
 import { DEFAULT_LOOK, type CharacterLook } from "@/lib/game-types";
 export default function CharacterAvatar({large=false,empty=false,onCreate,look=DEFAULT_LOOK}:{
   large?:boolean;empty?:boolean;onCreate?:()=>void;look?:CharacterLook;

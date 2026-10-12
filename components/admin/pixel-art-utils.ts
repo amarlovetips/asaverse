@@ -1,4 +1,4 @@
-﻿export function linePixels(ax:number,ay:number,bx:number,by:number){
+export function linePixels(ax:number,ay:number,bx:number,by:number){
  const points:string[]=[];
  const dx=Math.abs(bx-ax),sx=ax<bx?1:-1;
  const dy=-Math.abs(by-ay),sy=ay<by?1:-1;
