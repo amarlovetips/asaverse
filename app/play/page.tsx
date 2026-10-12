@@ -1,5 +1,6 @@
-﻿import { Suspense } from "react";
+import { Suspense } from "react";
 import PlayerGate from "@/components/PlayerGate";
+import LoadingScreen from "@/components/LoadingScreen";
 export default function PlayPage(){
-  return <Suspense fallback={<main className="min-h-screen bg-[#070b17]"/>}><PlayerGate/></Suspense>;
+  return <Suspense fallback={<LoadingScreen message="Entering AsaVerse..." />}><PlayerGate/></Suspense>;
 }
