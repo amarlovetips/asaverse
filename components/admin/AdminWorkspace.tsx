@@ -7,7 +7,7 @@ export default function AdminWorkspace({ active, routeRemainder = [] }: { active
   const editor = active === "Pixel Art Studio" || active === "Appearance Editor";
 
   return (
-    <main className="h-[calc(100vh-56px)] min-w-0 flex-1 overflow-hidden p-1">
+    <main className="h-full min-h-0 min-w-0 flex-1 overflow-hidden p-1">
       {active === "Walk Animations" ? (
         <WalkAnimationWorkspace routeRemainder={routeRemainder} />
       ) : active === "Characters" ? (
@@ -18,9 +18,7 @@ export default function AdminWorkspace({ active, routeRemainder = [] }: { active
         <PixelArtEditor />
       ) : (
         <div className="p-6 text-slate-300">
-          <p className="text-xs text-slate-500">Admin Studio / {active}</p>
-          <h2 className="mt-2 text-xl font-semibold">{active}</h2>
-          <p className="mt-4">Workspace ready for {active}.</p>
+          <p>Workspace ready for {active}.</p>
         </div>
       )}
     </main>

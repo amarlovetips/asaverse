@@ -2,14 +2,19 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePixelDrawing } from "./usePixelDrawing";
-import { applyColorFilter, boundsBetween, floodFillPixels, gradientPixels, linePixels, polygonPixels, shapePixels, textPixels, type PixelPoint } from "../pixel-art-utils";
+import { applyColorFilter, boundsBetween, floodFillPixels, gradientPixels, linePixels, polygonPixels, textPixels, type PixelPoint } from "../pixel-art-utils";
+import { strokePixels } from "./strokePixels";
+import { recolorSelectionPixels } from "./selectionPixels";
+import { copySelection, pasteSelection, selectionPixelKeys, type SelectionBuffer } from "./selectionOperations";
+import { transformSelection } from "./transformSelection";
+import type { SelectionBounds, SelectionKind } from "./SelectionBounds";
+import { floodFillSelection } from "./selectionFloodFill";
 import { createClient } from "../../../lib/supabase";
 import { readDesignSidePixels, readDesignTextLayers, type PixelTextLayer } from "../../../lib/character-design-json";
 
 export const ARTBOARDS = ["body", "face", "facial-hair", "hair", "body-back", "face-back", "facial-hair-back", "hair-back", "clothing", "outfit", "clothing-back", "outfit-back", "back-side"];
 type Pixels = Record<string,string>;
-export type SelectionBounds = {x:number;y:number;width:number;height:number};
-export type SelectionKind = "region"|"magic"|"text";
+export type { SelectionBounds, SelectionKind } from "./SelectionBounds";
 
 function textBounds(layer:PixelTextLayer):SelectionBounds{return {x:layer.x,y:layer.y,width:Math.max(1,(layer.text.length*6-1)*layer.scale),height:7*layer.scale};}
 function fitTextLayer(layer:PixelTextLayer,size:number):PixelTextLayer{const bounds=textBounds(layer);return {...layer,x:Math.max(0,Math.min(Math.max(0,size-bounds.width),layer.x)),y:Math.max(0,Math.min(Math.max(0,size-bounds.height),layer.y))};}
@@ -22,7 +27,6 @@ function movePixelKeys(original:Pixels,keys:string[],dx:number,dy:number,size:nu
  for(const key of keys){const color=original[key];if(!color)continue;const [x,y]=key.split(",").map(Number),nx=x+dx,ny=y+dy;if(nx>=0&&ny>=0&&nx<size&&ny<size)next[`${nx},${ny}`]=color;}
  return next;
 }
-function moveSelectionPixels(original:Pixels,bounds:SelectionBounds,dx:number,dy:number,size:number){return movePixelKeys(original,keysInBounds(original,bounds),dx,dy,size);}
 
 function composeText(pixels:Pixels,layers:PixelTextLayer[],size:number){
  return layers.reduce((result,layer)=>({...result,...textPixels(layer.text,layer.x,layer.y,layer.color,size,layer.scale)}),{...pixels});
@@ -38,6 +42,7 @@ export function usePixelEditorState() {
  const [shapeFillColor,setShapeFillColor]=useState<string|null>(null);
  const [borderColor,setBorderColor]=useState("#ffffff");
  const [shapeFilled,setShapeFilled]=useState(true);
+ const [strokeWidth,setStrokeWidth]=useState(1);
  const [size,setSizeState]=useState(32);
  const [tool,setTool]=useState("pencil");
  const [zoom,setZoom]=useState(12);
@@ -62,8 +67,10 @@ export function usePixelEditorState() {
  const histories=useRef<Record<string,Pixels[]>>({});
  const gestureStart=useRef<PixelPoint|null>(null);
  const gestureOriginal=useRef<Pixels>({});
+ const gestureSelection=useRef<{bounds:SelectionBounds;mask:Set<string>|null}|null>(null);
  const moveStart=useRef<PixelPoint|null>(null);
  const moveSelectionOrigin=useRef<SelectionBounds|null>(null);
+ const clipboard=useRef<{buffer:SelectionBuffer;origin:SelectionBounds}|null>(null);
  const selectionDragMoved=useRef(false);
  const [boardPixels,setBoardPixels]=useState<Record<string,Pixels>>({});
  const draw=usePixelDrawing(size,color,tool);
@@ -72,6 +79,22 @@ export function usePixelEditorState() {
  useEffect(()=>{let live=true;async function loadBase(){try{const db=createClient();const {data:{user}}=await db.auth.getUser();if(!user)return;const {data,error}=await db.from("character_designs").select("pixel_data").eq("user_id",user.id).eq("design_type","base-body").eq("is_default_base",true).maybeSingle();if(live&&!error&&data){const pixels=(data.pixel_data||{}) as Pixels;boards.current["base-body"]=pixels;setBoardPixels(old=>({...old,"base-body":pixels}));}}catch{}}void loadBase();return()=>{live=false;};},[]);
 
  function writePixels(pixels:Pixels){boards.current[part]=pixels;setBoardPixels(old=>({...old,[part]:pixels}));draw.setPixels(pixels);}
+ function editAllowed(x:number,y:number){
+  const active=gestureSelection.current;if(!active)return true;
+  const {bounds,mask}=active,key=`${x},${y}`;
+  return x>=bounds.x&&y>=bounds.y&&x<bounds.x+bounds.width&&y<bounds.y+bounds.height&&(!mask||mask.has(key));
+ }
+ function paintPoint(x:number,y:number){
+  const active=gestureSelection.current;
+  if(tool==="fill"&&active){writePixels(floodFillSelection(draw.pixels,x,y,size,color,active.bounds,active.mask?[...active.mask]:undefined));return;}
+  if(editAllowed(x,y))draw.paint(x,y);
+ }
+ function writeGesturePixels(pixels:Pixels){
+  const active=gestureSelection.current;if(!active){writePixels(pixels);return;}
+  const next={...gestureOriginal.current};
+  for(const [key,value] of Object.entries(pixels)){const [x,y]=key.split(",").map(Number);if(editAllowed(x,y))next[key]=value;}
+  writePixels(next);
+ }
  function remember(){draw.remember();histories.current[part]=[...draw.history,draw.pixels].slice(-30);}
  function setPart(v:string){
   const category=v.endsWith("-back")?v.slice(0,-5):v;
@@ -113,13 +136,13 @@ export function usePixelEditorState() {
  function locate(e:React.PointerEvent<HTMLDivElement>){const r=e.currentTarget.getBoundingClientRect();const x=Math.max(0,Math.min(size-1,Math.floor((e.clientX-r.left)/r.width*size)));const y=Math.max(0,Math.min(size-1,Math.floor((e.clientY-r.top)/r.height*size)));setXy(`${x}, ${y}`);return {x,y};}
  function previewShape(start:PixelPoint,end:PixelPoint,constrain=false){
   if(constrain){const span=Math.max(Math.abs(end.x-start.x),Math.abs(end.y-start.y));end={x:start.x+Math.sign(end.x-start.x||1)*span,y:start.y+Math.sign(end.y-start.y||1)*span};}
-  if(tool==="gradient")writePixels({...gestureOriginal.current,...gradientPixels(start,end,size,fillColor,borderColor)});
+  if(tool==="gradient")writeGesturePixels({...gestureOriginal.current,...gradientPixels(start,end,size,fillColor,borderColor)});
   else if(tool==="perspective"){
    const amount=end.x-start.x,next:Pixels={};
    for(const [key,pixelColor] of Object.entries(gestureOriginal.current)){const [x,y]=key.split(",").map(Number);const nx=Math.max(0,Math.min(size-1,Math.round(x+amount*y/Math.max(1,size-1))));next[`${nx},${y}`]=pixelColor;}
-   writePixels(next);
-  }else if(tool==="rectangle"||tool==="circle")writePixels({...gestureOriginal.current,...shapePixels(tool,start,end,size,shapeFillColor,borderColor,shapeFillColor!==null)});
-  else writePixels({...gestureOriginal.current,...shapePixels(tool,start,end,size,fillColor,borderColor,shapeFilled)});
+   writeGesturePixels(next);
+  }else if(["line","rectangle","circle"].includes(tool))writeGesturePixels({...gestureOriginal.current,...strokePixels(tool,start,end,size,shapeFillColor,borderColor,shapeFillColor!==null,strokeWidth)});
+  else writeGesturePixels({...gestureOriginal.current,...strokePixels(tool,start,end,size,fillColor,borderColor,shapeFilled,strokeWidth)});
  }
  function start(e:React.PointerEvent<HTMLDivElement>){
   if(e.button!==0)return;e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);const point=locate(e);
@@ -146,11 +169,14 @@ export function usePixelEditorState() {
    setActiveTextId(null);
    selectionDragMoved.current=false;moveStart.current=point;moveSelectionOrigin.current=selection;gestureOriginal.current={...draw.pixels};moveSelectionKeys.current=selectedPixelKeys.length?selectedPixelKeys:keysInBounds(draw.pixels,selection);movingPixels.current=true;setSelectionMoving(true);draw.setDrawing(true);return;
   }
-  setActiveTextId(null);setSelectedPixelKeys([]);setSelectionKind("region");
+  const constrain=selection&&!activeTextId&&!["select","crop","text","filter","polygon"].includes(tool);
+  gestureSelection.current=constrain?{bounds:selection,mask:selectionKind==="magic"?new Set(selectedPixelKeys):null}:null;
+  if(constrain&&!editAllowed(point.x,point.y))return;
+  setActiveTextId(null);if(!constrain){setSelectedPixelKeys([]);setSelectionKind("region");}
   remember();gestureStart.current=point;gestureOriginal.current={...draw.pixels};draw.setLast("");draw.setPrevious([point.x,point.y]);
   if(tool==="select"||tool==="crop"){setSelection({x:point.x,y:point.y,width:1,height:1});setSelectionKind("region");setSelectedPixelKeys([]);draw.setDrawing(true);return;}
   if(["line","rectangle","circle","gradient","perspective"].includes(tool)){draw.setDrawing(true);previewShape(point,point,e.shiftKey);return;}
-  draw.setDrawing(true);draw.paint(point.x,point.y);
+  draw.setDrawing(true);paintPoint(point.x,point.y);
  }
  function move(e:React.PointerEvent<HTMLDivElement>){
   const point=locate(e);if(!draw.drawing.current)return;
@@ -161,14 +187,15 @@ export function usePixelEditorState() {
   if(!selectionDragMoved.current){remember();selectionDragMoved.current=true;}
    const dx=Math.max(-origin.x,Math.min(size-origin.x-origin.width,point.x-moveStart.current.x));
    const dy=Math.max(-origin.y,Math.min(size-origin.y-origin.height,point.y-moveStart.current.y));
-   writePixels(moveSelectionPixels(gestureOriginal.current,origin,dx,dy,size));
+   writePixels(movePixelKeys(gestureOriginal.current,moveSelectionKeys.current,dx,dy,size));
+   if(selectionKind==="magic")setSelectedPixelKeys(moveSelectionKeys.current.map(key=>{const [x,y]=key.split(",").map(Number);return `${x+dx},${y+dy}`;}));
    setSelection({...origin,x:origin.x+dx,y:origin.y+dy});return;
   }
   if((tool==="select"||tool==="crop")&&gestureStart.current){setSelection(boundsBetween(gestureStart.current,point));return;}
   if(["line","rectangle","circle","gradient","perspective"].includes(tool)&&gestureStart.current){previewShape(gestureStart.current,point,e.shiftKey);return;}
-  const previous=draw.previous.current;if(previous&&tool!=="fill")linePixels(previous[0],previous[1],point.x,point.y).forEach(key=>{const [x,y]=key.split(",").map(Number);draw.paint(x,y);});draw.setPrevious([point.x,point.y]);
+  const previous=draw.previous.current;if(previous&&tool!=="fill")linePixels(previous[0],previous[1],point.x,point.y).forEach(key=>{const [x,y]=key.split(",").map(Number);paintPoint(x,y);});draw.setPrevious([point.x,point.y]);
  }
- function stop(){if(!draw.drawing.current)return;draw.setDrawing(false);draw.setLast("");draw.setPrevious(null);histories.current[part]=draw.history;boards.current[part]=draw.pixels;textBoards.current[part]=textLayers;if(moveSelectionOrigin.current&&!selectionDragMoved.current){setSelection(null);setSelectedPixelKeys([]);setActiveTextId(null);setSelectionKind("region");}setSelectionMoving(false);textMove.current=null;moveStart.current=null;moveSelectionOrigin.current=null;gestureStart.current=null;selectionDragMoved.current=false;}
+ function stop(){if(!draw.drawing.current)return;draw.setDrawing(false);draw.setLast("");draw.setPrevious(null);histories.current[part]=draw.history;boards.current[part]=draw.pixels;textBoards.current[part]=textLayers;if(moveSelectionOrigin.current&&!selectionDragMoved.current){setSelection(null);setSelectedPixelKeys([]);setActiveTextId(null);setSelectionKind("region");}setSelectionMoving(false);textMove.current=null;moveStart.current=null;moveSelectionOrigin.current=null;gestureStart.current=null;gestureSelection.current=null;selectionDragMoved.current=false;}
  function finishPolygon(){if(polygonPoints.length<3)return;remember();writePixels({...draw.pixels,...polygonPixels(polygonPoints,fillColor,borderColor,shapeFilled)});setPolygonPoints([]);}
  function applyText(text:string,scale:number){if(!textOrigin||!text.trim())return;const layer:PixelTextLayer={id:globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`,text:text.trim(),x:textOrigin.x,y:textOrigin.y,scale:Math.max(1,Math.min(4,scale)),color:fillColor};const next=[...textLayers,layer];textBoards.current[part]=next;setTextLayers(next);setActiveTextId(layer.id);setSelection(textBounds(layer));setTextOrigin(null);}
  function editSelectedText(text:string){if(!activeTextId)return;const next=textLayers.map(layer=>layer.id===activeTextId?fitTextLayer({...layer,text},size):layer);setTextLayers(next);textBoards.current[part]=next;const active=next.find(layer=>layer.id===activeTextId);if(active)setSelection(textBounds(active));}
@@ -177,9 +204,40 @@ export function usePixelEditorState() {
  function applyCrop(){if(!selection)return;remember();const next:Pixels={};for(const [key,c] of Object.entries(draw.pixels)){const [x,y]=key.split(",").map(Number);if(x>=selection.x&&y>=selection.y&&x<selection.x+selection.width&&y<selection.y+selection.height)next[`${x-selection.x},${y-selection.y}`]=c;}writePixels(next);setSelection(null);}
  function applyPerspective(amount:number){if(!Object.keys(draw.pixels).length)return;remember();const next:Pixels={};for(const [key,c] of Object.entries(draw.pixels)){const [x,y]=key.split(",").map(Number);const nx=Math.max(0,Math.min(size-1,Math.round(x+amount*y/Math.max(1,size-1))));next[`${nx},${y}`]=c;}writePixels(next);}
  function applySelectionFill(fill:string|null){if(!selection||activeTextId||selectionKind==="magic")return;const x=selection.x+Math.floor(selection.width/2),y=selection.y+Math.floor(selection.height/2);const next=floodFillPixels(draw.pixels,x,y,size,fill,selection);if(next===draw.pixels)return;remember();writePixels(next);}
- function moveSelectionBy(dx:number,dy:number){if(!selection||(!dx&&!dy))return;if(activeTextId){const next=textLayers.map(layer=>layer.id===activeTextId?{...layer,x:Math.max(0,Math.min(size-textBounds(layer).width,layer.x+dx)),y:Math.max(0,Math.min(size-textBounds(layer).height,layer.y+dy))}:layer);setTextLayers(next);textBoards.current[part]=next;const active=next.find(layer=>layer.id===activeTextId);if(active)setSelection(textBounds(active));return;}remember();writePixels(moveSelectionPixels(draw.pixels,selection,dx,dy,size));setSelection({...selection,x:Math.max(0,Math.min(size-selection.width,selection.x+dx)),y:Math.max(0,Math.min(size-selection.height,selection.y+dy))});}
- function deleteSelection(){if(!selection)return;if(activeTextId){const next=textLayers.filter(layer=>layer.id!==activeTextId);setTextLayers(next);textBoards.current[part]=next;setActiveTextId(null);setSelection(null);return;}remember();const next={...draw.pixels};for(const key of Object.keys(next)){const [x,y]=key.split(",").map(Number);if(x>=selection.x&&y>=selection.y&&x<selection.x+selection.width&&y<selection.y+selection.height)delete next[key];}writePixels(next);}
- function undo(){const prior=draw.history.at(-1);if(!prior)return;draw.undo();const h=draw.history.slice(0,-1);histories.current[part]=h;boards.current[part]=prior;setBoardPixels(old=>({...old,[part]:prior}));setSelection(null);}
+ function selectAll(){setActiveTextId(null);setSelectedPixelKeys([]);setSelectionKind("region");setSelection({x:0,y:0,width:size,height:size});}
+ function invertSelection(){
+  const included=new Set(selection?selectionPixelKeys(draw.pixels,selection,selectionKind==="magic"?selectedPixelKeys:undefined):[]);
+  const keys:string[]=[];for(let y=0;y<size;y++)for(let x=0;x<size;x++){const key=`${x},${y}`;if(!included.has(key))keys.push(key);}
+  setActiveTextId(null);setSelectionKind("magic");setSelectedPixelKeys(keys);setSelection({x:0,y:0,width:size,height:size});
+ }
+ function copySelectionPixels(cut=false){
+  if(!selection||activeTextId)return;
+  const keys=selectionPixelKeys(draw.pixels,selection,selectionKind==="magic"?selectedPixelKeys:undefined);
+  clipboard.current={buffer:copySelection(draw.pixels,selection,keys),origin:selection};
+  if(cut&&keys.length){remember();writePixels(Object.fromEntries(Object.entries(draw.pixels).filter(([key])=>!keys.includes(key))));}
+ }
+ function pasteSelectionPixels(){
+  if(!clipboard.current)return;
+  const {buffer,origin}=clipboard.current,x=Math.max(0,Math.min(size-buffer.width,selection?.x??origin.x)),y=Math.max(0,Math.min(size-buffer.height,selection?.y??origin.y));
+  const pasted=pasteSelection(draw.pixels,buffer,x,y,size);if(!pasted.keys.length)return;
+  remember();writePixels(pasted.pixels);setActiveTextId(null);setSelectionKind("magic");setSelectedPixelKeys(pasted.keys);setSelection({x,y,width:buffer.width,height:buffer.height});
+ }
+ function transformSelectionPixels(transform:"horizontal"|"vertical"|"clockwise"|"counterclockwise"){
+  if(!selection||activeTextId)return;
+  const keys=selectionPixelKeys(draw.pixels,selection,selectionKind==="magic"?selectedPixelKeys:undefined);
+  if(!keys.length)return;
+  const result=transformSelection(draw.pixels,selection,keys,size,transform);remember();writePixels(result.pixels);
+  setSelection(result.bounds);setSelectionKind("magic");setSelectedPixelKeys(result.keys);
+ }
+ function recolorSelection(nextColor:string){
+  if(!selection||activeTextId)return;
+  const keys=selectionKind==="magic"?selectedPixelKeys:keysInBounds(draw.pixels,selection);
+  const next=recolorSelectionPixels(draw.pixels,keys,nextColor);
+  if(next!==draw.pixels){remember();writePixels(next);}
+ }
+ function moveSelectionBy(dx:number,dy:number){if(!selection||(!dx&&!dy))return;if(activeTextId){const next=textLayers.map(layer=>layer.id===activeTextId?{...layer,x:Math.max(0,Math.min(size-textBounds(layer).width,layer.x+dx)),y:Math.max(0,Math.min(size-textBounds(layer).height,layer.y+dy))}:layer);setTextLayers(next);textBoards.current[part]=next;const active=next.find(layer=>layer.id===activeTextId);if(active)setSelection(textBounds(active));return;}const keys=selectionPixelKeys(draw.pixels,selection,selectionKind==="magic"?selectedPixelKeys:undefined);if(!keys.length)return;remember();writePixels(movePixelKeys(draw.pixels,keys,dx,dy,size));if(selectionKind==="magic")setSelectedPixelKeys(keys.map(key=>{const[x,y]=key.split(",").map(Number);return `${x+dx},${y+dy}`;}));setSelection({...selection,x:Math.max(0,Math.min(size-selection.width,selection.x+dx)),y:Math.max(0,Math.min(size-selection.height,selection.y+dy))});}
+ function deleteSelection(){if(!selection)return;if(activeTextId){const next=textLayers.filter(layer=>layer.id!==activeTextId);setTextLayers(next);textBoards.current[part]=next;setActiveTextId(null);setSelection(null);return;}const keys=selectionPixelKeys(draw.pixels,selection,selectionKind==="magic"?selectedPixelKeys:undefined);if(!keys.length)return;remember();const next={...draw.pixels};for(const key of keys)delete next[key];writePixels(next);}
+ function undo(){const prior=draw.history.at(-1);if(!prior)return;draw.undo();const h=draw.history.slice(0,-1);histories.current[part]=h;boards.current[part]=prior;setBoardPixels(old=>({...old,[part]:prior}));}
  function redo(){const next=draw.future.at(-1);if(!next)return;draw.redo();boards.current[part]=next;setBoardPixels(old=>({...old,[part]:next}));}
- return {name,setName,activeDesignId,setActiveDesignId,part,setPart,side,setSide,category:part.endsWith("-back")?part.slice(0,-5):part==="back-side"?"body":part,boardPixels,color,setColor,fillColor,setFillColor,shapeFillColor,setShapeFillColor,borderColor,setBorderColor,shapeFilled,setShapeFilled,size,setSize:changeSize,tool,setTool,zoom,setZoom,guide,setGuide,xy,recent,setRecent,...draw,pixels:renderedPixels,basePixels:draw.pixels,textLayers,activeText: textLayers.find(layer=>layer.id===activeTextId)||null,activeTextId,editSelectedText,scaleSelectedText,referencePixels,setPixels,loadDesign,undo,redo,setHistory:draw.setHistory,start,move,stop,selection,selectionKind,clearSelection:()=>{setSelection(null);setActiveTextId(null);setSelectedPixelKeys([]);setSelectionKind("region");},moveSelectionBy,deleteSelection,applySelectionFill,selectionMoving,polygonPoints,finishPolygon,textOrigin,applyText,applyFilter,applyCrop,applyPerspective};
+ return {name,setName,activeDesignId,setActiveDesignId,part,setPart,side,setSide,category:part.endsWith("-back")?part.slice(0,-5):part==="back-side"?"body":part,boardPixels,color,setColor,fillColor,setFillColor,shapeFillColor,setShapeFillColor,borderColor,setBorderColor,shapeFilled,setShapeFilled,strokeWidth,setStrokeWidth,size,setSize:changeSize,tool,setTool,zoom,setZoom,guide,setGuide,xy,recent,setRecent,...draw,pixels:renderedPixels,basePixels:draw.pixels,textLayers,activeText: textLayers.find(layer=>layer.id===activeTextId)||null,activeTextId,editSelectedText,scaleSelectedText,referencePixels,setPixels,loadDesign,undo,redo,setHistory:draw.setHistory,start,move,stop,selection,selectionKind,selectedPixelKeys,clearSelection:()=>{setSelection(null);setActiveTextId(null);setSelectedPixelKeys([]);setSelectionKind("region");},selectAll,invertSelection,copySelectionPixels,pasteSelectionPixels,transformSelectionPixels,moveSelectionBy,deleteSelection,applySelectionFill,recolorSelection,selectionMoving,polygonPoints,finishPolygon,textOrigin,applyText,applyFilter,applyCrop,applyPerspective};
 }
