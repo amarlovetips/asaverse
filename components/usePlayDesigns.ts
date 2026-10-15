@@ -4,6 +4,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
+import { extractDesignPixels, readEmbeddedIdleFrames } from "@/lib/character-design-json";
+import type { IdleAnimationFrameJson } from "@/lib/character-design-json";
 
 export type PlayDesign = {
   id: string;
@@ -12,6 +14,8 @@ export type PlayDesign = {
   canvas_width: number;
   canvas_height: number;
   pixel_data: Record<string, string>;
+  idle_frames?: IdleAnimationFrameJson[] | null;
+  is_default_base?: boolean;
   position_x?: number;
   position_y?: number;
   source: "supabase" | "github";
@@ -46,14 +50,14 @@ export function usePlayDesigns() {
       if (flags.get("play_supabase_characters_enabled") !== false) {
         const { data, error } = await db
           .from("character_designs")
-          .select("id,design_name,design_type,canvas_width,canvas_height,pixel_data,position_x,position_y")
+          .select("id,design_name,design_type,canvas_width,canvas_height,pixel_data,position_x,position_y,is_default_base")
           .eq("is_published", true)
           .order("updated_at", { ascending: false });
 
         if (error) throw error;
 
         for (const d of data || []) {
-          result.push({ ...d, pixel_data: d.pixel_data || {}, source: "supabase" });
+          result.push({ ...d, pixel_data: extractDesignPixels(d.pixel_data, d.canvas_width) || {}, idle_frames: readEmbeddedIdleFrames(d.pixel_data), source: "supabase" });
         }
       }
 
@@ -77,7 +81,8 @@ export function usePlayDesigns() {
             design_type: d.design_type || "character",
             canvas_width: d.canvas_width || 64,
             canvas_height: d.canvas_height || 64,
-            pixel_data: d.pixel_data,
+            pixel_data: extractDesignPixels(d.pixel_data, d.canvas_width || 64),
+            idle_frames: readEmbeddedIdleFrames(d.pixel_data),
             source: "github" as const,
           };
         }));

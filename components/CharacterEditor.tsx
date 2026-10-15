@@ -4,11 +4,12 @@
 
 import PixelHero from "./PixelHero";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { CharacterLook } from "@/lib/game-types";
 import { DEFAULT_LOOK } from "@/lib/game-types";
 import CharacterComposite from "./CharacterComposite";
 import { usePlayDesigns } from "./usePlayDesigns";
+import { getCharacterDesignSlot, getDefaultCharacterParts } from "@/lib/character-design-defaults";
 
 const tabs = [
   { id: "face", label: "Face", key: "face" },
@@ -16,19 +17,15 @@ const tabs = [
   { id: "clothing", label: "Clothings", key: "clothing" },
   { id: "facial-hair", label: "Facial Hair", key: "facialHair" },
   { id: "hair", label: "Hair", key: "hair" },
+  { id: "hat", label: "Hat", key: "hat" },
 ] as const;
 
 type Category = typeof tabs[number]["id"];
 type PartKey = typeof tabs[number]["key"];
 
 function getCategory(type: string): string {
-  const t = type.toLowerCase().replace(/-back$/, "");
-  if (/facial[-_ ]?hair|beard|mustache/.test(t)) return "facial-hair";
-  if (/hair/.test(t)) return "hair";
-  if (/face|head/.test(t)) return "face";
-  if (/cloth|outfit|suit|dress|clothing/.test(t)) return "clothing";
-  if (/body|base/.test(t)) return "body";
-  return t;
+  const slot = getCharacterDesignSlot(type);
+  return slot === "facialHair" ? "facial-hair" : slot || type.toLowerCase().replace(/-back$/, "");
 }
 
 export default function CharacterEditor({
@@ -49,6 +46,7 @@ export default function CharacterEditor({
   onSave: (name: string, look: CharacterLook) => Promise<void>;
 }) {
   const { designs, loading, error: designError } = usePlayDesigns();
+  const defaultsSeeded = useRef(false);
   const [name, setName] = useState(initialName);
   const [category, setCategory] = useState<Category>("face");
   const [look, setLook] = useState<CharacterLook>({
@@ -64,7 +62,18 @@ export default function CharacterEditor({
       ...initialAppearance,
       parts: { ...initialAppearance?.parts },
     });
+    defaultsSeeded.current = Boolean(initialAppearance);
   }, [initialName, initialAppearance]);
+
+  useEffect(() => {
+    if (loading || defaultsSeeded.current || initialAppearance) return;
+    defaultsSeeded.current = true;
+    const defaults = getDefaultCharacterParts(designs);
+    setLook((current) => ({
+      ...current,
+      parts: { ...defaults, ...current.parts },
+    }));
+  }, [designs, initialAppearance, loading]);
 
   const tab = tabs.find((item) => item.id === category)!;
   const filtered = designs.filter(
@@ -82,7 +91,7 @@ export default function CharacterEditor({
     const key: PartKey = tab.key;
     setLook((old) => ({
       ...old,
-      parts: { ...old.parts, [key]: old.parts?.[key] === id ? undefined : id },
+      parts: { ...old.parts, [key]: old.parts?.[key] === id ? null : id },
     }));
   }
 

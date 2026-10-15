@@ -1,7 +1,18 @@
 "use client";
 import { menus } from "./menu-config";
 
-export default function AdminSidebar({ collapsed, setCollapsed, expanded, setExpanded, mobileOpen, setMobileOpen, active, setActive, onLogout }: { collapsed: boolean; setCollapsed: (value: boolean) => void; expanded: string; setExpanded: (value: string) => void; mobileOpen: boolean; setMobileOpen: (value: boolean) => void; active: string; setActive: (value: string) => void; onLogout: () => void }) {
+export default function AdminSidebar({ collapsed, setCollapsed, expanded, mobileOpen, setMobileOpen, active, activeMenu, onOpenMenu, onOpenItem, onLogout }: {
+  collapsed: boolean;
+  setCollapsed: (value: boolean) => void;
+  expanded: string;
+  mobileOpen: boolean;
+  setMobileOpen: (value: boolean) => void;
+  active: string;
+  activeMenu: string;
+  onOpenMenu: (menuName: string, forceExpand?: boolean) => void;
+  onOpenItem: (menuName: string, itemName: string) => void;
+  onLogout: () => void;
+}) {
   return <>
     {mobileOpen && <button aria-label="Close menu" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-30 bg-black/50 md:hidden" />}
     <aside className={`fixed inset-y-0 left-0 z-40 flex flex-col border-r border-[#303844] bg-[#191f28] transition-all md:relative md:translate-x-0 ${mobileOpen ? "translate-x-0" : "-translate-x-full"} ${collapsed ? "w-20" : "w-64"}`}>
@@ -11,11 +22,11 @@ export default function AdminSidebar({ collapsed, setCollapsed, expanded, setExp
       </header>
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
         {menus.map(menu => <div key={menu.name}>
-          <button title={collapsed ? menu.name : ""} onClick={() => { if (collapsed) setCollapsed(false); setExpanded(expanded === menu.name ? "" : menu.name); }} className="flex w-full gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[#29313d]">
+          <button title={collapsed ? menu.name : ""} onClick={() => { const wasCollapsed = collapsed; if (wasCollapsed) setCollapsed(false); onOpenMenu(menu.name, wasCollapsed); }} className={`flex w-full gap-3 rounded-lg px-3 py-2.5 text-left text-sm hover:bg-[#29313d] ${activeMenu === menu.name ? "bg-[#252d38] text-white" : ""}`}>
             <span>{menu.icon}</span>{!collapsed && <><span className="flex-1">{menu.name}</span><span>{expanded === menu.name ? "−" : "+"}</span></>}
           </button>
           {!collapsed && expanded === menu.name && <div className="ml-5 border-l border-[#3b4654] pl-3">
-            {menu.items.map(item => <button key={item} onClick={() => { setActive(item); setMobileOpen(false); }} className={`block w-full rounded-md px-3 py-2 text-left text-sm ${active === item ? "bg-[#354555] text-white" : "text-[#aeb9c7] hover:bg-[#252d38]"}`}>{item}</button>)}
+            {menu.items.map(item => <button key={item} onClick={() => onOpenItem(menu.name, item)} className={`block w-full rounded-md px-3 py-2 text-left text-sm ${active === item ? "bg-[#354555] text-white" : "text-[#aeb9c7] hover:bg-[#252d38]"}`}>{item}</button>)}
           </div>}
         </div>)}
       </nav>

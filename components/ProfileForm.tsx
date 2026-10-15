@@ -2,6 +2,8 @@
 import { useState, type FormEvent, type ChangeEvent } from "react";
 import { createClient } from "@/lib/supabase";
 import type { Profile } from "@/lib/game-types";
+import { DEFAULT_LOOK } from "@/lib/game-types";
+import { getDefaultCharacterParts } from "@/lib/character-design-defaults";
 
 export default function ProfileForm({ wallet, userId, onSaved }: {
   wallet: string; userId: string; onSaved: (p: Profile) => void;
@@ -12,11 +14,47 @@ export default function ProfileForm({ wallet, userId, onSaved }: {
   async function save(e: FormEvent) {
     e.preventDefault(); setBusy(true); setErr("");
     try {
-      const { data, error } = await createClient().from("profiles")
+      const db = createClient();
+      const { data, error } = await db.from("profiles")
         .insert({ id: userId, wallet_address: wallet.toLowerCase(), ...f })
         .select("*").single();
-      if (error || !data) throw error ?? new Error("Profile save failed");
-      onSaved(data as Profile);
+      let profile = data;
+      if (error?.code === "23505") {
+        const { data: existingProfile, error: readError } = await db.from("profiles")
+          .select("*").eq("id", userId).maybeSingle();
+        if (readError) throw readError;
+        profile = existingProfile;
+      } else if (error) {
+        throw error;
+      }
+      if (!profile) throw error ?? new Error("Profile save failed");
+
+      const { data: existing, error: characterCheckError } = await db.from("characters")
+        .select("id").eq("user_id", userId).limit(1);
+      if (characterCheckError) throw characterCheckError;
+      if (!existing?.length) {
+        const { data: defaults, error: defaultsError } = await db.from("character_designs")
+          .select("id,design_type,is_default_base")
+          .eq("is_published", true)
+          .eq("is_default_base", true)
+          .order("updated_at", { ascending: false });
+        if (defaultsError) throw defaultsError;
+        const appearance = { ...DEFAULT_LOOK, parts: getDefaultCharacterParts(defaults || []) };
+        const { error: starterError } = await db.from("characters").insert({
+          user_id: userId,
+          character_name: "Adventurer",
+          appearance,
+          level: 1,
+          xp: 0,
+          position_x: 0,
+          position_y: 0,
+          tutorial_completed: false,
+          gold_coin: 0,
+          lust_coin: 0,
+        });
+        if (starterError) throw starterError;
+      }
+      onSaved(profile as Profile);
     } catch (e) { setErr(String((e as { message?: string; details?: string; code?: string }).message || JSON.stringify(e))); }
     finally { setBusy(false); }
   }

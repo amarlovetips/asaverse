@@ -52,12 +52,13 @@ function PixelArtGrid(p: Props) {
 
   return (
     <div
+      data-artboard
       onPointerDown={p.onPointerDown}
       onPointerMove={p.onPointerMove}
       onPointerUp={p.onPointerUp}
       onPointerCancel={p.onPointerUp}
       onLostPointerCapture={p.onPointerUp}
-      className="absolute inset-0 touch-none border border-slate-500"
+      className="absolute inset-0 z-10 touch-none border border-slate-500"
       style={{ width: extent, height: extent }}
     >
       <canvas

@@ -8,11 +8,12 @@ export type Profile = {
 };
 
 export type CharacterPartDesigns = {
-  face?: string;
-  body?: string;
-  clothing?: string;
-  facialHair?: string;
-  hair?: string;
+  face?: string | null;
+  body?: string | null;
+  clothing?: string | null;
+  facialHair?: string | null;
+  hair?: string | null;
+  hat?: string | null;
 };
 
 export type CharacterLook = {

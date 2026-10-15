@@ -1,10 +1,12 @@
 "use client";
 import { useRef, useState } from "react";
+import { floodFillPixels } from "../pixel-art-utils";
 
 type Pixels = Record<string,string>;
 export function usePixelDrawing(size:number,color:string,tool:string){
  const [pixels,setPixels]=useState<Pixels>({});
  const [history,setHistory]=useState<Pixels[]>([]);
+ const [future,setFuture]=useState<Pixels[]>([]);
  const drawing=useRef(false);
  const last=useRef("");
  const previous=useRef<[number,number]|null>(null);
@@ -15,17 +17,13 @@ export function usePixelDrawing(size:number,color:string,tool:string){
   setPixels(old=>{
    const next={...old};
    if(tool==="eraser")delete next[k];
-   else if(tool==="fill"){
-    const target=old[k]||"#252b35";
-    for(let i=0;i<size*size;i++){
-     const a=`${i%size},${Math.floor(i/size)}`;
-     if((old[a]||"#252b35")===target)next[a]=color;
-    }
-   }else next[k]=color;
+   else if(tool==="fill")return floodFillPixels(old,x,y,size,color);
+   else next[k]=color;
    return next;
   });
  }
- function remember(){setHistory(h=>[...h.slice(-29),pixels]);}
- function undo(){const old=history.at(-1);if(old){setPixels(old);setHistory(h=>h.slice(0,-1));}}
- return {pixels,setPixels,history,setHistory,drawing,last,previous,setDrawing:(v:boolean)=>{drawing.current=v;},setLast:(v:string)=>{last.current=v;},setPrevious:(v:[number,number]|null)=>{previous.current=v;},paint,remember,undo};
+ function remember(){setHistory(h=>[...h.slice(-29),pixels]);setFuture([]);}
+ function undo(){const old=history.at(-1);if(old){setFuture(f=>[...f,pixels]);setPixels(old);setHistory(h=>h.slice(0,-1));}}
+ function redo(){const next=future.at(-1);if(next){setHistory(h=>[...h,pixels]);setPixels(next);setFuture(f=>f.slice(0,-1));}}
+ return {pixels,setPixels,history,setHistory,future,setFuture,drawing,last,previous,setDrawing:(v:boolean)=>{drawing.current=v;},setLast:(v:string)=>{last.current=v;},setPrevious:(v:[number,number]|null)=>{previous.current=v;},paint,remember,undo,redo};
 }

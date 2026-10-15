@@ -1,4 +1,5 @@
 "use client";
+import { extractDesignPixels } from "@/lib/character-design-json";
 export type Design = {
   id: string;
   design_name: string;
@@ -29,7 +30,7 @@ function PixelPreview({ design }: { design: Design }) {
     <svg viewBox={`0 0 ${width} ${height}`}
       className="h-20 w-20 shrink-0 rounded bg-slate-950"
       shapeRendering="crispEdges">
-      {Object.entries(design.pixel_data || {}).map(([point, color]) => {
+      {Object.entries(extractDesignPixels(design.pixel_data, Math.max(width, height))).map(([point, color]) => {
         const [x, y] = point.split(",").map(Number);
         if (!Number.isFinite(x) || !Number.isFinite(y) ||
             !/^#[0-9a-f]{3,8}$/i.test(color)) return null;

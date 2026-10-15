@@ -11,6 +11,7 @@ export default function AdminPage() {
   const [busy, B] = useState(false);
   const [checking, C] = useState(true);
   const [ok, O] = useState(false);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -33,7 +34,8 @@ export default function AdminPage() {
         if (admin?.role === "admin" && admin.is_active) {
           if (live) O(true);
         } else {
-          await db.auth.signOut();
+          // A transient or incomplete admin lookup must not destroy a valid Supabase session.
+          if (live) S("Admin access could not be verified. Your session is still active. Please try again.");
         }
       } catch (e) {
         if (live) S(e instanceof Error ? e.message : "Session restore failed");
@@ -44,7 +46,7 @@ export default function AdminPage() {
 
     void restoreAdmin();
     return () => { live = false; };
-  }, []);
+  }, [restoreAttempt]);
 
   async function login(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -102,6 +104,13 @@ export default function AdminPage() {
             Admin Login
           </button>
           {error && <p className="break-words text-red-300">{error}</p>}
+          {error && <button type="button" onClick={() => {
+            S("");
+            C(true);
+            setRestoreAttempt(attempt => attempt + 1);
+          }} className="rounded-lg border border-cyan-800 p-3 text-sm text-cyan-200">
+            Retry session restore
+          </button>}
         </form>
       </section>
     </main>

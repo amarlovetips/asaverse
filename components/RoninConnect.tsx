@@ -35,28 +35,26 @@ export default function RoninConnect({ onLogin, onLogout, onRestoreReady }: { on
           localStorage.setItem("asaverse.loginAt", String(started));
         }
 
-        if (started && Date.now() - started < 24 * 60 * 60 * 1000) {
-          let { data: profile, error } = await db.from("profiles")
+        let { data: profile, error } = await db.from("profiles")
+          .select("wallet_address")
+          .eq("id", session.user.id)
+          .maybeSingle();
+
+        if (!profile && !error) {
+          const fallback = await db.from("profiles")
             .select("wallet_address")
-            .eq("id", session.user.id)
+            .ilike("wallet_address", wallet)
             .maybeSingle();
+          profile = fallback.data;
+          error = fallback.error;
+        }
 
-          if (!profile && !error) {
-            const fallback = await db.from("profiles")
-              .select("wallet_address")
-              .ilike("wallet_address", wallet)
-              .maybeSingle();
-            profile = fallback.data;
-            error = fallback.error;
-          }
+        if (error) throw error;
 
-          if (error) throw error;
-
-          if (profile?.wallet_address?.toLowerCase() === wallet.toLowerCase()) {
-            onLogin({ address: wallet, userId: session.user.id });
-            O(false);
-            return;
-          }
+        if (profile?.wallet_address?.toLowerCase() === wallet.toLowerCase()) {
+          onLogin({ address: wallet, userId: session.user.id });
+          O(false);
+          return;
         }
       }
 

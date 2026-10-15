@@ -2,6 +2,8 @@
 import { useState, useCallback } from "react";
 import { createClient } from "../../../lib/supabase";
 import type { Design } from "./components/DesignList";
+import { mergeDesignPixels } from "@/lib/character-design-json";
+import { getCharacterDesignSlot } from "@/lib/character-design-defaults";
 
 export function useCharacterDesigns() {
   const [items, setItems] = useState<Design[]>([]);
@@ -37,6 +39,8 @@ export function useCharacterDesigns() {
   });
 
   const toggle = (d: Design) => run(async db => {
+    if (d.is_default_base && d.is_published)
+      throw Error("Remove this design as the default before unpublishing it.");
     const { error } = await db.from("character_designs")
       .update({ is_published: !d.is_published }).eq("id", d.id);
     if (error) throw error;
@@ -51,8 +55,10 @@ export function useCharacterDesigns() {
   });
 
   const setDefault = (d: Design) => run(async db => {
-    const base = d.design_type.replace(/-back$/, "");
-    const types = [base, `${base}-back`];
+    if (d.design_type.toLowerCase().endsWith("-back"))
+      throw Error("Choose the front design as the default.");
+    const slot = getCharacterDesignSlot(d.design_type);
+    if (!slot) throw Error("This design type cannot be used as a character default.");
 
     if (d.is_default_base) {
       const { error } = await db.from("character_designs")
@@ -63,17 +69,22 @@ export function useCharacterDesigns() {
       return;
     }
 
-    const existingDefault = items.find(x =>
-      x.is_default_base && types.includes(x.design_type)
+    const existingDefaults = items.filter(x =>
+      x.id !== d.id && x.is_default_base && getCharacterDesignSlot(x.design_type) === slot
     );
-    if (existingDefault)
-      throw Error(`Unset the current default "${existingDefault.design_name}" first.`);
+    if (existingDefaults.length) {
+      const { error } = await db.from("character_designs")
+        .update({ is_default_base: false })
+        .in("id", existingDefaults.map(x => x.id));
+      if (error) throw error;
+    }
 
     const { error } = await db.from("character_designs")
-      .update({ is_default_base: true }).eq("id", d.id);
+      .update({ is_default_base: true, is_published: true }).eq("id", d.id);
     if (error) throw error;
-    setItems(old => old.map(x => x.id === d.id
-      ? { ...x, is_default_base: true } : x));
+    setItems(old => old.map(x => getCharacterDesignSlot(x.design_type) === slot
+      ? { ...x, is_default_base: x.id === d.id, is_published: x.id === d.id ? true : x.is_published }
+      : x));
   });
   const saveSide = async (
     d: Design, side: "front" | "back", pixels: Record<string, string>
@@ -86,18 +97,18 @@ export function useCharacterDesigns() {
       if (existing) {
         const { error } = await db.from("character_designs")
           .update({
-            pixel_data: pixels, canvas_width: 64, canvas_height: 64,
+            pixel_data: mergeDesignPixels(existing.pixel_data, pixels), canvas_width: 64, canvas_height: 64,
             updated_at: new Date().toISOString()
           }).eq("id", existing.id);
         if (error) throw error;
         setItems(old => old.map(x => x.id === existing.id
-          ? { ...x, pixel_data: pixels, canvas_width: 64 } : x));
+          ? { ...x, pixel_data: { ...mergeDesignPixels(x.pixel_data, pixels) } as Record<string, string>, canvas_width: 64 } : x));
       } else {
         const { data, error } = await db.from("character_designs")
           .insert({
             user_id: d.user_id, design_name: d.design_name,
             design_type: targetType, canvas_width: 64, canvas_height: 64,
-            pixel_data: pixels, palette: d.palette || [],
+            pixel_data: mergeDesignPixels(null, pixels), palette: d.palette || [],
             is_published: false, is_default_base: false
           }).select("*").single();
         if (error) throw error;

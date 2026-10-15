@@ -2,27 +2,26 @@
 
 import type { CharacterLook } from "@/lib/game-types";
 import type { PlayDesign } from "./usePlayDesigns";
+import useIdleAnimationFrame from "./useIdleAnimationFrame";
+import { getCharacterDesignSlot } from "@/lib/character-design-defaults";
 
 type Props = {
   look: CharacterLook;
   designs: PlayDesign[];
   size?: number;
   showPlanet?: boolean;
+  animate?: boolean;
+  animationFrame?: number;
 };
 
-const categories = ["body", "face", "facial-hair", "clothing", "hair"];
+const categories = ["body", "face", "facial-hair", "clothing", "hair", "hat"];
 
 function getCategory(type: string) {
-  const t = type.toLowerCase().replace(/-back$/, "");
-  if (/facial[-_ ]?hair|beard|mustache/.test(t)) return "facial-hair";
-  if (/hair/.test(t)) return "hair";
-  if (/face|head/.test(t)) return "face";
-  if (/cloth|outfit|suit|dress|clothing/.test(t)) return "clothing";
-  if (/body|base/.test(t)) return "body";
-  return t;
+  const slot = getCharacterDesignSlot(type);
+  return slot === "facialHair" ? "facial-hair" : slot || type.toLowerCase().replace(/-back$/, "");
 }
 
-export default function CharacterComposite({ look, designs, size = 300, showPlanet = true }: Props) {
+export default function CharacterComposite({ look, designs, size = 300, showPlanet = true, animate = true, animationFrame }: Props) {
   const parts = look.parts || {};
   const selected = categories.map(category => {
     const key = category === "facial-hair" ? "facialHair" : category;
@@ -33,13 +32,17 @@ export default function CharacterComposite({ look, designs, size = 300, showPlan
       !d.design_type.toLowerCase().endsWith("-back")
     );
     if (chosen) return chosen;
-    if (category === "face" || category === "body")
+    if ((category === "face" || category === "body") && parts[key as keyof typeof parts] !== null)
       return designs.find(d =>
         getCategory(d.design_type) === category &&
         !d.design_type.toLowerCase().endsWith("-back")
       );
     return undefined;
   }).filter((d): d is PlayDesign => Boolean(d));
+  const autoFrame = useIdleAnimationFrame(animate && selected.some(design =>
+    (getCategory(design.design_type) === "body" || getCategory(design.design_type) === "face") && design.idle_frames?.length === 3
+  ));
+  const displayedFrame = animationFrame ?? autoFrame;
 
   if (!selected.length) return null;
 
@@ -69,9 +72,13 @@ export default function CharacterComposite({ look, designs, size = 300, showPlan
         </g>
       )}
 
-      {selected.map(design => (
+      {selected.map(design => {
+        const framePixels = displayedFrame === undefined || (getCategory(design.design_type) !== "body" && getCategory(design.design_type) !== "face")
+          ? undefined
+          : design.idle_frames?.[displayedFrame]?.pixelData;
+        return (
         <g key={design.id} transform={`translate(${design.position_x || 0} ${((design.position_y || 0) - 1)})`}>
-          {Object.entries(design.pixel_data || {}).map(([point, color]) => {
+          {Object.entries(framePixels || design.pixel_data || {}).map(([point, color]) => {
             const [x, y] = point.split(",").map(Number);
             if (
               !Number.isInteger(x) || !Number.isInteger(y) ||
@@ -81,18 +88,8 @@ export default function CharacterComposite({ look, designs, size = 300, showPlan
             return <rect key={point} x={x} y={y} width="1" height="1" fill={color} />;
           })}
         </g>
-      ))}
-
-      <g fill="#ffffff">
-        <rect x="7" y="12" width="2" height="2" />
-        <rect x="51" y="19" width="2" height="2" />
-        <rect x="46" y="7" width="2" height="2" />
-        <rect x="13" y="30" width="2" height="2" />
-      </g>
-      <g fill="#38bdf8">
-        <rect x="54" y="35" width="2" height="2" />
-        <rect x="5" y="43" width="2" height="2" />
-      </g>
+        );
+      })}
     </svg>
   );
 }

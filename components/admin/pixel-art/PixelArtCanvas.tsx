@@ -3,6 +3,8 @@
 import Image from "next/image";
 import PixelArtGrid from "./PixelArtGrid";
 import AlignmentGuides from "./AlignmentGuides";
+import ReferencePixelCanvas from "./ReferencePixelCanvas";
+import type { SelectionBounds } from "./usePixelEditorState";
 
 type Props = {
  size:number;
@@ -18,6 +20,9 @@ type Props = {
  imageX:number;
  imageY:number;
  imageToolActive:boolean;
+ referencePixels:Record<string,string>;
+ referenceOpacity:number;
+ selection:SelectionBounds|null;
  onImagePointerDown:(e:React.PointerEvent<HTMLImageElement>)=>void;
  onImagePointerMove:(e:React.PointerEvent<HTMLImageElement>)=>void;
  onImagePointerUp:(e:React.PointerEvent<HTMLImageElement>)=>void;
@@ -34,6 +39,7 @@ export default function PixelArtCanvas(p:Props) {
    className="relative shrink-0 overflow-hidden border border-slate-600"
    style={{width:extent,height:extent,backgroundColor:"#252b35"}}
   >
+   <ReferencePixelCanvas size={p.size} zoom={p.zoom} pixels={p.referencePixels} opacity={p.referenceOpacity}/>
    {p.imageUrl&&p.imageVisible&&(
     <Image src={p.imageUrl} width={extent} height={extent} unoptimized
      alt="Image layer"
@@ -44,7 +50,7 @@ export default function PixelArtCanvas(p:Props) {
      onPointerCancel={p.onImagePointerUp}
      className={`absolute inset-0 h-full w-full object-fill select-none ${
       p.imageToolActive
-       ? "z-10 cursor-grab active:cursor-grabbing touch-none"
+       ? "z-20 cursor-grab active:cursor-grabbing touch-none"
        : "pointer-events-none"
      }`}
      style={{
@@ -63,6 +69,7 @@ export default function PixelArtCanvas(p:Props) {
     onPointerMove={p.onPointerMove}
     onPointerUp={p.onPointerUp}
    />
+   {p.selection&&<div aria-label="Active pixel selection" className="pointer-events-none absolute z-20 border border-dashed border-yellow-200 bg-yellow-200/10 shadow-[0_0_0_1px_#111827]" style={{left:p.selection.x*p.zoom,top:p.selection.y*p.zoom,width:p.selection.width*p.zoom,height:p.selection.height*p.zoom}}/>}
    <AlignmentGuides part={p.part} enabled={p.guide}/>
   </div>
  );

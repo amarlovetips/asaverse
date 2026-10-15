@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { createClient } from "../../../lib/supabase";
+import { getCharacterDesignSlot } from "@/lib/character-design-defaults";
 
 type Design = {
   id: string;
@@ -61,6 +62,10 @@ export default function DesignPublishing() {
     setBusy(true);
     try {
       const db = await verifyAdmin();
+      if (d.design_type.toLowerCase().endsWith("-back"))
+        throw Error("Choose the front design as the default.");
+      const slot = getCharacterDesignSlot(d.design_type);
+      if (!slot) throw Error("This design type cannot be used as a character default.");
       if (d.is_default_base) {
         const { error } = await db.from("character_designs")
           .update({ is_default_base: false }).eq("id", d.id);
@@ -68,14 +73,17 @@ export default function DesignPublishing() {
         setItems(old => old.map(x => x.id === d.id
           ? { ...x, is_default_base: false } : x));
       } else {
-        const { error: resetError } = await db.from("character_designs")
-          .update({ is_default_base: false }).eq("design_type", d.design_type);
-        if (resetError) throw resetError;
+        const previous = items.filter(x => x.id !== d.id && x.is_default_base && getCharacterDesignSlot(x.design_type) === slot);
+        if (previous.length) {
+          const { error: resetError } = await db.from("character_designs")
+            .update({ is_default_base: false }).in("id", previous.map(x => x.id));
+          if (resetError) throw resetError;
+        }
         const { error } = await db.from("character_designs")
-          .update({ is_default_base: true }).eq("id", d.id);
+          .update({ is_default_base: true, is_published: true }).eq("id", d.id);
         if (error) throw error;
-        setItems(old => old.map(x => x.design_type === d.design_type
-          ? { ...x, is_default_base: x.id === d.id } : x));
+        setItems(old => old.map(x => getCharacterDesignSlot(x.design_type) === slot
+          ? { ...x, is_default_base: x.id === d.id, is_published: x.id === d.id ? true : x.is_published } : x));
       }
       setMessage("Default design updated.");
     } catch (e) {

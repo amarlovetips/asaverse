@@ -18,6 +18,7 @@ export default function PlayerGate() {
   const [entering, setEntering] = useState(false);
   const [inWorld, setInWorld] = useState(false);
   const [worldReady, setWorldReady] = useState(false);
+  const [restoreAttempt, setRestoreAttempt] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -29,28 +30,21 @@ export default function PlayerGate() {
         if (!alive) return;
 
         if (session) {
-          const started = Number(localStorage.getItem("asaverse.loginAt") || 0);
-          if (started && Date.now() - started >= 86400000) {
-            await db.auth.signOut();
-            localStorage.removeItem("asaverse.loginAt");
-            localStorage.removeItem("asaverse.wallet");
-          } else {
-            const wallet = localStorage.getItem("asaverse.wallet");
-            let { data, error } = await db.from("profiles").select("*")
-              .eq("id", session.user.id).maybeSingle();
+          const wallet = localStorage.getItem("asaverse.wallet");
+          let { data, error } = await db.from("profiles").select("*")
+            .eq("id", session.user.id).maybeSingle();
 
-            if (!data && !error && wallet) {
-              const r = await db.from("profiles").select("*")
-                .ilike("wallet_address", wallet).maybeSingle();
-              data = r.data;
-              error = r.error;
-            }
+          if (!data && !error && wallet) {
+            const r = await db.from("profiles").select("*")
+              .ilike("wallet_address", wallet).maybeSingle();
+            data = r.data;
+            error = r.error;
+          }
 
-            if (error) throw error;
-            if (data && alive) {
-              setProfile(data as Profile);
-              setLogin({ address: data.wallet_address, userId: session.user.id });
-            }
+          if (error) throw error;
+          if (data && alive) {
+            setProfile(data as Profile);
+            setLogin({ address: data.wallet_address, userId: session.user.id });
           }
         }
       } catch (e) {
@@ -62,7 +56,7 @@ export default function PlayerGate() {
 
     void restore();
     return () => { alive = false; };
-  }, []);
+  }, [restoreAttempt]);
 
   async function loggedIn(v: Login) {
     setChecking(true);
@@ -122,7 +116,16 @@ export default function PlayerGate() {
       setProfile(null);
       setStatus("");
     }} />
-    {status && <p className="break-words text-sm text-amber-300">{status}</p>}
+    {status && <div className="grid max-w-md gap-3 text-center">
+      <p className="break-words text-sm text-amber-300">{status}</p>
+      <button onClick={() => {
+        setStatus("");
+        setChecking(true);
+        setRestoreAttempt(attempt => attempt + 1);
+      }} className="rounded-xl border border-amber-700 px-4 py-2 text-sm text-amber-200">
+        Retry session restore
+      </button>
+    </div>}
     {login && !status && <ProfileForm wallet={login.address} userId={login.userId} onSaved={setProfile} />}
   </main>;
 }
