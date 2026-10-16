@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { createClient } from "../../../lib/supabase";
 
-type Design={id:string;design_name:string;design_type:string;canvas_width:number;pixel_data:unknown;palette:string[]};
+type Design={id:string;design_name:string;design_type:string;canvas_width:number;canvas_height:number;pixel_data:unknown;palette:string[]};
 type Props={onLoad:(d:Design)=>void};
 export default function LoadDesigns({onLoad}:Props){
  const [items,setItems]=useState<Design[]>([]);
@@ -12,7 +12,7 @@ export default function LoadDesigns({onLoad}:Props){
   const db=createClient();
   const {data:{user}}=await db.auth.getUser();
   if(!user){setMessage("Please sign in first.");return;}
-  const {data,error}=await db.from("character_designs").select("id,design_name,design_type,canvas_width,pixel_data,palette").eq("user_id",user.id).in("design_type",["body","face","facial-hair","hair","clothing","outfit"]).order("updated_at",{ascending:false});
+  const {data,error}=await db.from("character_designs").select("id,design_name,design_type,canvas_width,canvas_height,pixel_data,palette").eq("user_id",user.id).in("design_type",["body","face","facial-hair","hair","clothing","outfit"]).order("updated_at",{ascending:false});
   if(error){setMessage(error.message);return;}
   setItems((data||[]) as Design[]);setMessage(data?.length?"":"No saved designs.");
  }

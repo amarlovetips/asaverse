@@ -1,7 +1,7 @@
 import type { SelectionBounds } from "./SelectionBounds";
 import type { SelectionTransform } from "./selectionOperations";
 
-export function transformSelection(pixels: Record<string, string>, bounds: SelectionBounds, keys: string[], size: number, transform: SelectionTransform) {
+export function transformSelection(pixels: Record<string, string>, bounds: SelectionBounds, keys: string[], width: number, transform: SelectionTransform, height = width) {
   const next = { ...pixels }, points: string[] = [];
   for (const key of keys) delete next[key];
   const rotate = transform === "clockwise" || transform === "counterclockwise";
@@ -11,7 +11,7 @@ export function transformSelection(pixels: Record<string, string>, bounds: Selec
     const px = transform === "horizontal" ? bounds.width - 1 - dx : transform === "vertical" ? dx : transform === "clockwise" ? bounds.height - 1 - dy : dy;
     const py = transform === "horizontal" ? dy : transform === "vertical" ? bounds.height - 1 - dy : transform === "clockwise" ? dx : bounds.width - 1 - dx;
     const nx = bounds.x + px, ny = bounds.y + py;
-    if (nx >= 0 && ny >= 0 && nx < size && ny < size) { next[`${nx},${ny}`] = pixels[key]; points.push(`${nx},${ny}`); }
+    if (nx >= 0 && ny >= 0 && nx < width && ny < height) { if (pixels[key] !== undefined) next[`${nx},${ny}`] = pixels[key]; points.push(`${nx},${ny}`); }
   }
   return { pixels: next, bounds: resultBounds, keys: points };
 }

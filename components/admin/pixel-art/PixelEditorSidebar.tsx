@@ -13,6 +13,7 @@ import DesignPublishing from "./DesignPublishing";
 import ExportDesign from "./ExportDesign";
 import ExportPng from "./ExportPng";
 import BaseBodyControls from "./BaseBodyControls";
+import RecolorSelectionButton from "./RecolorSelectionButton";
 
 type Props = { vm: ReturnType<typeof usePixelArtEditorController> };
 
@@ -23,6 +24,7 @@ export default function PixelEditorSidebar({ vm }: Props) {
       <FillBorderSwatches fill={s.shapeFillColor} border={s.borderColor} active={vm.activeColor} onFill={c => { s.setShapeFillColor(c); if (c) { s.setFillColor(c); s.setColor(c); } }} onBorder={c => { s.setBorderColor(c); s.setColor(c); }} onActive={vm.setActiveColor}/>
       <ColorPicker color={s.color} onChange={vm.chooseColor}/><PixelArtPalette colors={vm.colors} color={s.color} onChange={vm.chooseColor}/>
       <RecentColors colors={s.recent} selected={s.color} onSelect={vm.chooseColor}/>
+      <RecolorSelectionButton count={s.selectedPixelCount} color={s.color} onRecolor={() => s.recolorSelection(s.color)}/>
     </div>
     <div className="h-px shrink-0 bg-slate-700"/>
     <section className="space-y-2"><h3 className="text-[10px] font-bold uppercase tracking-[.16em] text-cyan-300">Tool Controls · {s.tool}</h3>
@@ -37,10 +39,10 @@ export default function PixelEditorSidebar({ vm }: Props) {
     {panel === "image" && <ReferenceImageControls name={image.name} url={image.url} visible={image.visible} opacity={image.opacity} scale={image.scale} x={image.x} y={image.y}
       onVisible={() => image.setVisible(v => !v)} onOpacity={image.setOpacity} onScale={image.setScale} onX={image.setX} onY={image.setY} onAdd={image.add}
       onRemove={() => { image.remove(); setPanel("tools"); }}/>}
-    {panel === "save" && <SaveDesign name={s.name} part={s.category} side={s.side} size={s.size} pixels={s.pixels} basePixels={s.basePixels} textLayers={s.textLayers} palette={vm.colors} designId={s.activeDesignId} onSaved={s.setActiveDesignId}/>}
+    {panel === "save" && <SaveDesign name={s.name} part={s.category} side={s.side} width={s.size} height={s.height} pixels={s.pixels} basePixels={s.basePixels} textLayers={s.textLayers} palette={vm.colors} designId={s.activeDesignId} onSaved={s.setActiveDesignId}/>}
     {panel === "load" && <LoadDesigns onLoad={d => { s.loadDesign(d); setPanel("tools"); }}/>}
     {panel === "publish" && <DesignPublishing/>}
-    {panel === "export" && <div className="space-y-2"><ExportDesign name={s.name} part={s.part} size={s.size} pixels={s.pixels} palette={vm.colors}/><ExportPng name={s.name} size={s.size} pixels={s.pixels} empty="#252b35"/></div>}
+    {panel === "export" && <div className="space-y-2"><ExportDesign name={s.name} part={s.part} size={s.size} height={s.height} pixels={s.pixels} palette={vm.colors}/><ExportPng name={s.name} size={s.size} height={s.height} pixels={s.pixels} empty="#252b35"/></div>}
     {panel === "base" && <BaseBodyControls name={s.name} size={s.size} pixels={s.pixels} palette={vm.colors}/>}
     {panel === "history" && <div className="rounded-lg border border-slate-700 bg-[#0c121b] p-3 text-xs text-slate-400">{s.history.length} undo steps · {s.future.length} redo steps</div>}
   </aside>;

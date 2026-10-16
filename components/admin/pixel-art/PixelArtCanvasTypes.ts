@@ -1,10 +1,10 @@
-import type { SelectionBounds } from "./SelectionBounds";
+import type { SelectionBounds, SelectionKind } from "./SelectionBounds";
 
 export type PixelArtCanvasProps = {
-  size: number; zoom: number; pixels: Record<string, string>; part: string; guide: boolean; empty: string;
+  size: number; height: number; zoom: number; pixels: Record<string, string>; part: string; guide: boolean; empty: string;
   imageUrl: string | null; imageOpacity: number; imageVisible: boolean; imageScale: number;
   imageX: number; imageY: number; imageToolActive: boolean;
-  referencePixels: Record<string, string>; referenceOpacity: number; selection: SelectionBounds | null;
+  referencePixels: Record<string, string>; referenceOpacity: number; selection: SelectionBounds | null; selectionKind: SelectionKind; selectedPixelKeys: string[];
   onImagePointerDown: (event: React.PointerEvent<HTMLImageElement>) => void;
   onImagePointerMove: (event: React.PointerEvent<HTMLImageElement>) => void;
   onImagePointerUp: (event: React.PointerEvent<HTMLImageElement>) => void;
@@ -14,5 +14,5 @@ export type PixelArtCanvasProps = {
 };
 
 export type ReferenceImageProps = Pick<PixelArtCanvasProps,
-  "size" | "zoom" | "imageUrl" | "imageOpacity" | "imageVisible" | "imageScale" |
+  "size" | "height" | "zoom" | "imageUrl" | "imageOpacity" | "imageVisible" | "imageScale" |
   "imageX" | "imageY" | "imageToolActive" | "onImagePointerDown" | "onImagePointerMove" | "onImagePointerUp">;

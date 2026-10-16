@@ -15,27 +15,27 @@ import IdleBodyOverlayToggle from "./IdleBodyOverlayToggle";
 import IdleHistoryControls from "./IdleHistoryControls";
 import IdleZoomControls from "./IdleZoomControls";
 import { extractDesignPixels, mergeIdleFrames, readEmbeddedIdleFrames } from "@/lib/character-design-json";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Trash2 } from "lucide-react";
 
 function emptyFrames(item: CharacterItem): IdleFrameData[] {
   return Array.from({ length: 3 }, () => ({ pixelData: { ...item.pixel_data } }));
 }
 
-function parseFrame(value: unknown, fallback: IdleFrameData): IdleFrameData {
+function parseFrame(value: unknown, fallback: IdleFrameData, size: number): IdleFrameData {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return fallback;
   const source = value as Record<string, unknown>;
   const rawPixels = source.pixelData;
   const pixelData = typeof rawPixels === "object" && rawPixels !== null && !Array.isArray(rawPixels)
     ? Object.fromEntries(Object.entries(rawPixels).filter(([coordinate, color]) => {
       const [x, y] = coordinate.split(",").map(Number);
-      return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < 64 && y >= 0 && y < 64 && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color);
+      return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && x < size && y >= 0 && y < size && typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color);
     })) as Record<string, string>
     : fallback.pixelData;
   return { pixelData };
 }
 
 function framesMatch(expected: IdleFrameData[], actual: IdleFrameData[] | null) {
-  if (!actual || actual.length !== 3 || expected.length !== 3) return false;
+  if (!actual || actual.length !== expected.length) return false;
   return expected.every((frame, index) => {
     const expectedEntries = Object.entries(frame.pixelData).sort(([a], [b]) => a.localeCompare(b));
     const actualEntries = Object.entries(actual[index].pixelData).sort(([a], [b]) => a.localeCompare(b));
@@ -57,24 +57,25 @@ export default function IdleAnimationEditor({ item, items, onBack }: { item: Cha
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [sqlNeeded, setSqlNeeded] = useState(false);
-  const [historyCounts, setHistoryCounts] = useState({ undo: [0, 0, 0], redo: [0, 0, 0] });
-  const undoHistory = useRef<Record<number, Record<string, string>[]>>({ 0: [], 1: [], 2: [] });
-  const redoHistory = useRef<Record<number, Record<string, string>[]>>({ 0: [], 1: [], 2: [] });
+  const [historyCounts, setHistoryCounts] = useState<Record<number, { undo: number; redo: number }>>({});
+  const undoHistory = useRef<Record<number, Record<string, string>[]>>({});
+  const redoHistory = useRef<Record<number, Record<string, string>[]>>({});
 
   function refreshHistoryCounts() {
-    setHistoryCounts({
-      undo: [0, 1, 2].map(frame => undoHistory.current[frame].length),
-      redo: [0, 1, 2].map(frame => redoHistory.current[frame].length),
-    });
+    setHistoryCounts(Object.fromEntries(frames.map((_, frame) => [frame, {
+      undo: undoHistory.current[frame]?.length || 0,
+      redo: redoHistory.current[frame]?.length || 0,
+    }])));
   }
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
-        if (item.idle_frames?.length === 3) {
+        if (item.idle_frames?.length) {
           setFrames(item.idle_frames.map(frame => ({ pixelData: { ...frame.pixelData } })));
-          setMessage("Saved frame data loaded from this item's JSON.");
+          setActiveFrame(0);
+          setMessage(`Loaded ${item.idle_frames.length} saved idle frames from this item's JSON.`);
           return;
         }
         const { data, error } = await createClient().from("character_idle_animations")
@@ -84,9 +85,11 @@ export default function IdleAnimationEditor({ item, items, onBack }: { item: Cha
         if (!data?.length) return;
         const loaded = emptyFrames(item);
         for (const row of data as { frame_number: number; frame_data: unknown }[]) {
-          if (row.frame_number >= 1 && row.frame_number <= 3) loaded[row.frame_number - 1] = parseFrame(row.frame_data, loaded[row.frame_number - 1]);
+          if (row.frame_number >= 1 && row.frame_number <= loaded.length)
+            loaded[row.frame_number - 1] = parseFrame(row.frame_data, loaded[row.frame_number - 1], item.canvas_width);
         }
         setFrames(loaded);
+        setActiveFrame(0);
         setMessage("Saved frame data loaded.");
       } catch (cause) {
         if (!alive) return;
@@ -101,32 +104,59 @@ export default function IdleAnimationEditor({ item, items, onBack }: { item: Cha
     setFrames(current => current.map((frame, index) => index === activeFrame ? { ...frame, pixelData } : frame));
   }
 
+  function addFrame() {
+    const next = frames.length;
+    setFrames(current => [...current, { pixelData: { ...current[activeFrame].pixelData } }]);
+    setActiveFrame(next);
+    undoHistory.current = {};
+    redoHistory.current = {};
+    setHistoryCounts({});
+    setSelectedPixels([]);
+  }
+
+  function deleteFrame() {
+    if (frames.length <= 1) return;
+    const next = Math.min(activeFrame, frames.length - 2);
+    setFrames(current => current.filter((_, index) => index !== activeFrame));
+    setActiveFrame(next);
+    undoHistory.current = {};
+    redoHistory.current = {};
+    setHistoryCounts({});
+    setSelectedPixels([]);
+  }
+
   function commitPixels(pixelData: Record<string, string>) {
-    undoHistory.current[activeFrame] = [...undoHistory.current[activeFrame], { ...frames[activeFrame].pixelData }].slice(-100);
+    undoHistory.current[activeFrame] = [...(undoHistory.current[activeFrame] || []), { ...frames[activeFrame].pixelData }].slice(-100);
     redoHistory.current[activeFrame] = [];
     refreshHistoryCounts();
     updatePixels(pixelData);
   }
 
   function undo() {
-    const history = undoHistory.current[activeFrame];
+    const history = undoHistory.current[activeFrame] || [];
     if (!history.length) return;
     const previous = history[history.length - 1];
     undoHistory.current[activeFrame] = history.slice(0, -1);
-    redoHistory.current[activeFrame] = [...redoHistory.current[activeFrame], { ...frames[activeFrame].pixelData }];
+    redoHistory.current[activeFrame] = [...(redoHistory.current[activeFrame] || []), { ...frames[activeFrame].pixelData }];
     refreshHistoryCounts();
     updatePixels(previous);
     setSelectedPixels([]);
   }
 
   function redo() {
-    const history = redoHistory.current[activeFrame];
+    const history = redoHistory.current[activeFrame] || [];
     if (!history.length) return;
     const next = history[history.length - 1];
     redoHistory.current[activeFrame] = history.slice(0, -1);
-    undoHistory.current[activeFrame] = [...undoHistory.current[activeFrame], { ...frames[activeFrame].pixelData }].slice(-100);
+    undoHistory.current[activeFrame] = [...(undoHistory.current[activeFrame] || []), { ...frames[activeFrame].pixelData }].slice(-100);
     refreshHistoryCounts();
     updatePixels(next);
+    setSelectedPixels([]);
+  }
+
+  function clearCurrentFrame() {
+    if (!Object.keys(frames[activeFrame].pixelData).length) return;
+    commitPixels({});
     setSelectedPixels([]);
   }
 
@@ -178,10 +208,10 @@ export default function IdleAnimationEditor({ item, items, onBack }: { item: Cha
         .eq("id", item.id).select("id,pixel_data").maybeSingle();
       if (error) throw error;
       if (!data) throw new Error("The design was not updated in the database. Check admin access or the RLS policy.");
-      const savedFrames = readEmbeddedIdleFrames(data.pixel_data);
-      if (!framesMatch(frames, savedFrames)) throw new Error("The three frames did not match the database after saving. Please try again.");
+      const savedFrames = readEmbeddedIdleFrames(data.pixel_data, "front", false, item.canvas_width);
+      if (!framesMatch(frames, savedFrames)) throw new Error(`The ${frames.length} frames did not match the database after saving. Please try again.`);
       setSqlNeeded(false);
-      setMessage("All three frames were saved to this item's JSON and verified.");
+      setMessage(`All ${frames.length} frames were saved to this item's JSON and verified.`);
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : "Frame save failed.";
       setSqlNeeded(/character_idle_animations|relation|schema cache|does not exist/i.test(detail));
@@ -213,7 +243,10 @@ export default function IdleAnimationEditor({ item, items, onBack }: { item: Cha
     <div className="flex min-h-10 shrink-0 items-center gap-2 overflow-x-auto rounded-lg border border-slate-800 bg-[#111821] px-2 py-1.5">
         <button type="button" onClick={onBack} title="Back to Character Idle list" aria-label="Back to Character Idle list"
           className="grid size-8 shrink-0 place-items-center rounded-md text-slate-400 hover:bg-slate-800 hover:text-white"><ArrowLeft size={16} /></button>
-        <IdleHistoryControls canUndo={historyCounts.undo[activeFrame] > 0} canRedo={historyCounts.redo[activeFrame] > 0} onUndo={undo} onRedo={redo} />
+        <IdleHistoryControls canUndo={(historyCounts[activeFrame]?.undo || 0) > 0} canRedo={(historyCounts[activeFrame]?.redo || 0) > 0} onUndo={undo} onRedo={redo} />
+        <button type="button" title="Clear current frame" aria-label="Clear current frame" disabled={!Object.keys(current.pixelData).length}
+          onClick={clearCurrentFrame}
+          className="grid size-8 shrink-0 place-items-center rounded border border-slate-700 text-slate-400 hover:border-rose-700 hover:text-rose-300 disabled:opacity-40"><Trash2 size={15} /></button>
         <IdleShapeSelector activeShape={shape} onSelect={setShape} />
         <span className="h-6 w-px shrink-0 bg-slate-700" />
         <IdleColorPalette colors={suggestedColors} selectedColor={activeColor} onSelect={setColor} />
@@ -240,7 +273,9 @@ export default function IdleAnimationEditor({ item, items, onBack }: { item: Cha
       </div>
       <aside className="col-span-2 grid min-h-0 grid-cols-[minmax(112px,0.55fr)_minmax(0,1fr)] gap-2 overflow-hidden rounded-lg border border-slate-800 bg-[#111821] p-2 lg:col-span-1 lg:grid-cols-1 lg:grid-rows-[auto_minmax(0,1fr)]">
         <IdleCharacterPreview items={items} target={item} frames={frames} activeFrame={activeFrame} selectedIds={previewPartIds}
-          onSelectFrame={frame => { setActiveFrame(frame); setSelectedPixels([]); }} onSave={() => void saveFrames()}
+          onSelectFrame={frame => { setActiveFrame(frame); setSelectedPixels([]); }}
+          onAddFrame={addFrame} onDeleteFrame={deleteFrame}
+          onSave={() => void saveFrames()}
           saving={busy} size={208} />
         <IdlePartSelector items={items} selectedIds={previewPartIds} onToggle={toggleItem} />
       </aside>

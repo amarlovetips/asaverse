@@ -16,13 +16,15 @@ function partDesign(slot: "body" | "face" | "hair" | "facialHair" | "clothing", 
     || items.find(item => getIdlePartSlot(item) === slot);
 }
 
-export default function IdleCharacterPreview({ items, target, frames, activeFrame, selectedIds, onSelectFrame, onSave, saving, size = 208 }: {
+export default function IdleCharacterPreview({ items, target, frames, activeFrame, selectedIds, onSelectFrame, onAddFrame, onDeleteFrame, onSave, saving, size = 208 }: {
   items: CharacterItem[];
   target: CharacterItem;
   frames: IdleFrameData[];
   activeFrame: number;
   selectedIds: string[];
   onSelectFrame: (frame: number) => void;
+  onAddFrame: () => void;
+  onDeleteFrame: () => void;
   onSave: () => void;
   saving: boolean;
   size?: number;
@@ -69,13 +71,15 @@ export default function IdleCharacterPreview({ items, target, frames, activeFram
         <p className="max-w-32 text-center text-[11px] text-slate-500">Default body item not found.</p>}
     </div>
     <div className="flex w-full justify-end">
-      <button type="button" title={playing ? "Pause preview" : "Preview all three frames"} aria-label={playing ? "Pause preview" : "Preview all three frames"}
+      <button type="button" title={playing ? "Pause preview" : `Preview all ${frames.length} frames`} aria-label={playing ? "Pause preview" : `Preview all ${frames.length} frames`}
         onClick={() => { if (!playing) setPreviewFrame(activeFrame); setPlaying(value => !value); }} className="grid size-8 shrink-0 place-items-center rounded border border-cyan-700 text-cyan-200">
         {playing ? <Pause size={15} aria-hidden="true" /> : <Play size={15} aria-hidden="true" />}
       </button>
     </div>
     <div className="grid w-full grid-cols-[minmax(0,1fr)_36px] items-center gap-1.5">
-      <IdleAnimationFrameSelector activeFrame={activeFrame} onSelect={onSelectFrame} />
+      <IdleAnimationFrameSelector activeFrame={activeFrame} frameCount={frames.length} onSelect={onSelectFrame}
+        onAdd={() => { setPlaying(false); setPreviewFrame(activeFrame + 1); onAddFrame(); }}
+        onDelete={() => { setPlaying(false); setPreviewFrame(Math.min(activeFrame, frames.length - 2)); onDeleteFrame(); }} />
       <IdleSaveFramesButton saving={saving} onSave={onSave} />
     </div>
   </section>;

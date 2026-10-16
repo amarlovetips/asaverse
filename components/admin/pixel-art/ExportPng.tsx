@@ -1,15 +1,15 @@
 "use client";
-type Props={name:string;size:number;pixels:Record<string,string>;empty:string};
-export default function ExportPng({name,size,pixels}:Props){
+type Props={name:string;size:number;height?:number;pixels:Record<string,string>;empty:string};
+export default function ExportPng({name,size,height=size,pixels}:Props){
  function exportPng(){
   const canvas=document.createElement("canvas");
-  canvas.width=size;canvas.height=size;
+  canvas.width=size;canvas.height=height;
   const ctx=canvas.getContext("2d");
   if(!ctx)return;
-  ctx.clearRect(0,0,size,size);
+  ctx.clearRect(0,0,size,height);
   for(const [key,color] of Object.entries(pixels)){
    const [x,y]=key.split(",").map(Number);
-   if(x>=0&&x<size&&y>=0&&y<size){
+   if(x>=0&&x<size&&y>=0&&y<height){
     ctx.fillStyle=color;ctx.fillRect(x,y,1,1);
    }
   }

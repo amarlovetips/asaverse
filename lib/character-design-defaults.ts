@@ -1,6 +1,9 @@
 import type { CharacterPartDesigns } from "@/lib/game-types";
 
 export type CharacterDesignSlot = keyof CharacterPartDesigns;
+export const CHARACTER_VISIBILITY_SLOTS = ["face", "body", "clothing", "hair", "facialHair"] as const;
+export type CharacterVisibilitySlot = typeof CHARACTER_VISIBILITY_SLOTS[number];
+export type CharacterLayerVisibility = Record<CharacterVisibilitySlot, boolean>;
 
 export function getCharacterDesignSlot(type: string): CharacterDesignSlot | null {
   const normalized = type.toLowerCase().replace(/-back$/, "").replace(/[_ ]/g, "-");

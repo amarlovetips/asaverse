@@ -4,6 +4,30 @@ export type IdleAnimationFrameJson = {
   pixelData: PixelMap;
 };
 
+export type WalkingAnimationFrameJson = IdleAnimationFrameJson & {
+  removedPixels?: string[];
+};
+
+export const WALK_DIRECTIONS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"] as const;
+export type WalkDirection = typeof WALK_DIRECTIONS[number];
+export type WalkingAnimationJson = {
+  directions: WalkDirection[];
+  frames: WalkingAnimationFrameJson[];
+  basePose?: "idle-cycle";
+  frameDurationMs?: number;
+};
+export const DEFAULT_WALK_FRAME_DURATION_MS = 420;
+
+export function getWalkingFrameDurationMs(
+  direction: WalkDirection | undefined,
+  body?: WalkingAnimationJson | null,
+  clothing?: WalkingAnimationJson | null
+) {
+  if (direction && body?.directions.includes(direction)) return body.frameDurationMs ?? DEFAULT_WALK_FRAME_DURATION_MS;
+  if (direction && clothing?.directions.includes(direction)) return clothing.frameDurationMs ?? DEFAULT_WALK_FRAME_DURATION_MS;
+  return DEFAULT_WALK_FRAME_DURATION_MS;
+}
+
 export type PixelTextLayer = {
   id: string;
   text: string;
@@ -54,16 +78,116 @@ export function readDesignTextLayers(value: unknown, side: "front" | "back"): Pi
   );
 }
 
-function normalizeFrames(value: unknown): IdleAnimationFrameJson[] | null {
-  if (!Array.isArray(value) || value.length !== 3) return null;
-  return value.map(frame => ({ pixelData: extractDesignPixels(isObject(frame) ? frame.pixelData : undefined) }));
+function normalizeFrames(value: unknown, size = 64): IdleAnimationFrameJson[] | null {
+  if (!Array.isArray(value) || !value.length) return null;
+  return value.map(frame => ({ pixelData: extractDesignPixels(isObject(frame) ? frame.pixelData : undefined, size) }));
 }
 
-export function readEmbeddedIdleFrames(value: unknown): IdleAnimationFrameJson[] | null {
+function readSideAnimation(value: unknown, side: "front" | "back", sideNode: boolean) {
   if (!isObject(value)) return null;
-  const animation = value[CHARACTER_ANIMATION_KEY];
-  if (!isObject(animation) || !isObject(animation.idle)) return null;
-  return normalizeFrames(animation.idle.frames);
+  if (!sideNode) return isObject(value[CHARACTER_ANIMATION_KEY]) ? value[CHARACTER_ANIMATION_KEY] : null;
+  const sides = value[CHARACTER_SIDES_KEY];
+  if (!isObject(sides) || !isObject(sides[side])) return null;
+  const sideData = sides[side];
+  return isObject(sideData.animation) ? sideData.animation : null;
+}
+
+export function readEmbeddedIdleFrames(value: unknown, side: "front" | "back" = "front", sideNode = false, size = 64): IdleAnimationFrameJson[] | null {
+  if (!isObject(value)) return null;
+  const animation = readSideAnimation(value, side, sideNode);
+  if (!animation || !isObject(animation.idle)) return null;
+  return normalizeFrames(animation.idle.frames, size);
+}
+
+export function readEmbeddedWalkingAnimation(value: unknown, side: "front" | "back" = "front", sideNode = false, size = 64): WalkingAnimationJson | null {
+  if (!isObject(value)) return null;
+  const animation = readSideAnimation(value, side, sideNode);
+  if (!isObject(animation) || !isObject(animation.walk)) return null;
+  const walk = animation.walk;
+  const rawFrames = Array.isArray(walk.frames) ? walk.frames : [];
+  const directions = [...new Set((Array.isArray(walk.directions) ? walk.directions : []).filter((item): item is WalkDirection =>
+    typeof item === "string" && (WALK_DIRECTIONS as readonly string[]).includes(item)
+  ))];
+  return {
+    directions,
+    ...(walk.basePose === "idle-cycle" ? { basePose: "idle-cycle" as const } : {}),
+    ...(Number.isInteger(walk.frameDurationMs) && Number(walk.frameDurationMs) >= 16 && Number(walk.frameDurationMs) <= 5000
+      ? { frameDurationMs: Number(walk.frameDurationMs) } : {}),
+    frames: rawFrames.length
+      ? rawFrames.map(frame => ({
+        pixelData: extractDesignPixels(isObject(frame) ? frame.pixelData : undefined, size),
+        ...(isObject(frame) && Array.isArray(frame.removedPixels)
+          ? { removedPixels: frame.removedPixels.filter((key): key is string => typeof key === "string" && COORDINATE.test(key)) }
+          : {}),
+      }))
+      : [{ pixelData: {} }],
+  };
+}
+
+export function mergeWalkingAnimation(
+  value: unknown, animation: WalkingAnimationJson, side: "front" | "back" = "front", sideNode = false
+): Record<string, unknown> {
+  const original = isObject(value) ? value : {};
+  const sideRoot = isObject(original[CHARACTER_SIDES_KEY]) ? original[CHARACTER_SIDES_KEY] : {};
+  const sideData = isObject(sideRoot[side]) ? sideRoot[side] : {};
+  const current = sideNode
+    ? isObject(sideData.animation) ? sideData.animation : {}
+    : isObject(original[CHARACTER_ANIMATION_KEY]) ? original[CHARACTER_ANIMATION_KEY] : {};
+  const previousWalk = isObject(current.walk) ? current.walk : {};
+  const directions = [...new Set(animation.directions.filter(direction =>
+    (WALK_DIRECTIONS as readonly string[]).includes(direction)
+  ))];
+  if (!directions.length || !animation.frames.length) throw new Error("Walking animation needs at least one frame and direction.");
+  const walk = {
+    ...current,
+    walk: {
+      ...previousWalk,
+      version: 1, frameCount: animation.frames.length, directions, frames: animation.frames,
+      ...(animation.basePose === "idle-cycle" ? { basePose: "idle-cycle" } : {}),
+      ...(animation.frameDurationMs ? { frameDurationMs: animation.frameDurationMs } : {}),
+    },
+  };
+  if (sideNode) return {
+    ...original,
+    [CHARACTER_SIDES_KEY]: {
+      ...sideRoot,
+      [side]: { ...sideData, animation: walk },
+    },
+  };
+  return {
+    ...original,
+    [CHARACTER_ANIMATION_KEY]: {
+      ...current,
+      walk: walk.walk,
+    },
+  };
+}
+
+export function composeWalkingFrame(
+  basePixels: PixelMap, frame: WalkingAnimationFrameJson, basePose?: "idle-cycle"
+): PixelMap {
+  if (basePose !== "idle-cycle") return { ...frame.pixelData };
+  const result = { ...basePixels, ...frame.pixelData };
+  for (const key of frame.removedPixels || []) delete result[key];
+  return result;
+}
+
+export function createWalkingFrameOverlay(basePixels: PixelMap, pixels: PixelMap): WalkingAnimationFrameJson {
+  const overrides = Object.fromEntries(Object.entries(pixels).filter(([key, color]) => basePixels[key] !== color));
+  return {
+    pixelData: overrides,
+    removedPixels: Object.keys(basePixels).filter(key => !(key in pixels)),
+  };
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!isObject(value)) return value;
+  return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonicalJson(value[key])]));
+}
+
+export function jsonDataEquals(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
 }
 
 function preserveDesignMetadata(value: unknown, pixels: PixelMap): Record<string, unknown> {
@@ -103,7 +227,7 @@ export function mergeIdleFrames(value: unknown, pixels: PixelMap, frames: IdleAn
     ...result,
     [CHARACTER_ANIMATION_KEY]: {
       ...current,
-      idle: { version: 1, frameCount: 3, frames },
+      idle: { version: 1, frameCount: frames.length, frames },
     },
   };
 }

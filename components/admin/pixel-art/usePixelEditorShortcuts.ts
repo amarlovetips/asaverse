@@ -29,7 +29,7 @@ export function usePixelEditorShortcuts(s: State, imageAvailable: boolean, onIma
         event.preventDefault(); const n = event.shiftKey ? 10 : 1;
         s.moveSelectionBy(event.key === "ArrowLeft" ? -n : event.key === "ArrowRight" ? n : 0, event.key === "ArrowUp" ? -n : event.key === "ArrowDown" ? n : 0); return;
       }
-      const shortcuts: Record<string, ReferenceTool> = { v: "select", b: "pencil", e: "eraser", g: "fill", l: "line", u: "rectangle", o: "circle", p: "polygon", t: "text", f: "filter", d: "gradient", c: "crop", k: "perspective" };
+      const shortcuts: Record<string, ReferenceTool> = { v: "select", w: "magic", b: "pencil", e: "eraser", g: "fill", l: "line", u: "rectangle", o: "circle", p: "polygon", t: "text", f: "filter", d: "gradient", c: "crop", k: "perspective" };
       if (shortcuts[key]) { event.preventDefault(); s.setTool(shortcuts[key]); onToolChange(); }
     }
     window.addEventListener("keydown", handle);

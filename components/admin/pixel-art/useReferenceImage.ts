@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { readReferencePixels } from "./readReferencePixels";
 
-export function useReferenceImage(size: number, onExtract: (pixels: Record<string, string>) => void, onControls: () => void) {
+export function useReferenceImage(size: number, height: number, onExtract: (pixels: Record<string, string>) => void, onControls: () => void) {
   const [url, setUrl] = useState<string | null>(null), [name, setName] = useState("");
   const [opacity, setOpacity] = useState(0.45), [visible, setVisible] = useState(true);
   const [scale, setScale] = useState(1), [x, setX] = useState(0), [y, setY] = useState(0);
@@ -18,7 +18,7 @@ export function useReferenceImage(size: number, onExtract: (pixels: Record<strin
   }
   async function extract() {
     if (!url) { onControls(); return; }
-    try { onExtract(await readReferencePixels(url, size)); }
+    try { onExtract(await readReferencePixels(url, size, height)); }
     catch (error) { alert(error instanceof Error ? error.message : "Could not read the reference image."); }
   }
   function down(event: React.PointerEvent<HTMLImageElement>) { event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY }; }

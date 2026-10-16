@@ -1,9 +1,9 @@
 "use client";
 import { useRef, useState } from "react";
-import { floodFillPixels } from "../pixel-art-utils";
+import { fillArtboard } from "./rectPixelOperations";
 
 type Pixels = Record<string,string>;
-export function usePixelDrawing(size:number,color:string,tool:string){
+export function usePixelDrawing(size:number,color:string,tool:string,height=size){
  const [pixels,setPixels]=useState<Pixels>({});
  const [history,setHistory]=useState<Pixels[]>([]);
  const [future,setFuture]=useState<Pixels[]>([]);
@@ -17,7 +17,7 @@ export function usePixelDrawing(size:number,color:string,tool:string){
   setPixels(old=>{
    const next={...old};
    if(tool==="eraser")delete next[k];
-   else if(tool==="fill")return floodFillPixels(old,x,y,size,color);
+   else if(tool==="fill")return fillArtboard(old,x,y,size,height,color);
    else next[k]=color;
    return next;
   });

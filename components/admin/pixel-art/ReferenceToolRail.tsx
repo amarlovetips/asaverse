@@ -1,9 +1,10 @@
 "use client";
 
-import { Blend, Circle, Crop, Eraser, Hexagon, Image as ImageIcon, Minus, MousePointer2, PaintBucket, Pencil, Scan, SlidersHorizontal, Square, Type } from "lucide-react";
+import { Blend, Circle, Crop, Eraser, Hexagon, Image as ImageIcon, Minus, MousePointer2, PaintBucket, Pencil, Scan, SlidersHorizontal, Square, Type, WandSparkles } from "lucide-react";
 
 const tools = [
   { id: "select", label: "Selection", icon: MousePointer2, shortcut: "V" },
+  { id: "magic", label: "Magic Wand", icon: WandSparkles, shortcut: "W" },
   { id: "pencil", label: "Pencil", icon: Pencil, shortcut: "B" },
   { id: "eraser", label: "Eraser", icon: Eraser, shortcut: "E" },
   { id: "fill", label: "Fill", icon: PaintBucket, shortcut: "G" },

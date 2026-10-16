@@ -4,8 +4,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { extractDesignPixels, readEmbeddedIdleFrames } from "@/lib/character-design-json";
-import type { IdleAnimationFrameJson } from "@/lib/character-design-json";
+import { extractDesignPixels, readDesignSidePixels, readEmbeddedIdleFrames, readEmbeddedWalkingAnimation } from "@/lib/character-design-json";
+import type { IdleAnimationFrameJson, WalkingAnimationJson } from "@/lib/character-design-json";
 
 export type PlayDesign = {
   id: string;
@@ -15,6 +15,10 @@ export type PlayDesign = {
   canvas_height: number;
   pixel_data: Record<string, string>;
   idle_frames?: IdleAnimationFrameJson[] | null;
+  walking_animation?: WalkingAnimationJson | null;
+  back_pixel_data?: Record<string, string>;
+  back_idle_frames?: IdleAnimationFrameJson[] | null;
+  back_walking_animation?: WalkingAnimationJson | null;
   is_default_base?: boolean;
   position_x?: number;
   position_y?: number;
@@ -57,7 +61,7 @@ export function usePlayDesigns() {
         if (error) throw error;
 
         for (const d of data || []) {
-          result.push({ ...d, pixel_data: extractDesignPixels(d.pixel_data, d.canvas_width) || {}, idle_frames: readEmbeddedIdleFrames(d.pixel_data), source: "supabase" });
+          result.push({ ...d, pixel_data: extractDesignPixels(d.pixel_data, d.canvas_width) || {}, idle_frames: readEmbeddedIdleFrames(d.pixel_data, "front", false, d.canvas_width), walking_animation: readEmbeddedWalkingAnimation(d.pixel_data, "front", false, d.canvas_width), back_pixel_data: readDesignSidePixels(d.pixel_data, "back", d.canvas_width), back_idle_frames: readEmbeddedIdleFrames(d.pixel_data, "back", true, d.canvas_width), back_walking_animation: readEmbeddedWalkingAnimation(d.pixel_data, "back", true, d.canvas_width), source: "supabase" });
         }
       }
 
@@ -82,7 +86,11 @@ export function usePlayDesigns() {
             canvas_width: d.canvas_width || 64,
             canvas_height: d.canvas_height || 64,
             pixel_data: extractDesignPixels(d.pixel_data, d.canvas_width || 64),
-            idle_frames: readEmbeddedIdleFrames(d.pixel_data),
+            idle_frames: readEmbeddedIdleFrames(d.pixel_data, "front", false, d.canvas_width || 64),
+            walking_animation: readEmbeddedWalkingAnimation(d.pixel_data, "front", false, d.canvas_width || 64),
+            back_pixel_data: readDesignSidePixels(d.pixel_data, "back", d.canvas_width || 64),
+            back_idle_frames: readEmbeddedIdleFrames(d.pixel_data, "back", true, d.canvas_width || 64),
+            back_walking_animation: readEmbeddedWalkingAnimation(d.pixel_data, "back", true, d.canvas_width || 64),
             source: "github" as const,
           };
         }));

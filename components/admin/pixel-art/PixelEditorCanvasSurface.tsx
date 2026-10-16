@@ -33,9 +33,9 @@ export default function PixelEditorCanvasSurface({ vm }: Props) {
   }, [s]);
   return <div ref={viewport} onPointerDown={pan.start} onPointerMove={pan.move} onPointerUp={pan.stop}
     onPointerCancel={pan.stop} onLostPointerCapture={pan.stop} className="min-h-0 min-w-0 flex-1 overflow-auto bg-[radial-gradient(ellipse_at_center,#182331_0%,#090e15_70%)]">
-    <div className="grid place-items-center" style={{ width: s.size * s.zoom + 72, height: s.size * s.zoom + 68, minWidth: "100%", minHeight: "100%" }}>
-      <div className="relative shrink-0 pl-8 pt-7"><CoordinateRuler size={s.size} zoom={s.zoom}/>
-        <PixelArtCanvas size={s.size} zoom={s.zoom} pixels={s.pixels} empty="#252b35" part={s.part} guide={s.guide} selection={s.selection}
+    <div className="grid place-items-center" style={{ width: s.size * s.zoom + 72, height: s.height * s.zoom + 68, minWidth: "100%", minHeight: "100%" }}>
+      <div className="relative shrink-0 pl-8 pt-7"><CoordinateRuler size={s.size} height={s.height} zoom={s.zoom}/>
+        <PixelArtCanvas size={s.size} height={s.height} zoom={s.zoom} pixels={s.pixels} empty="#252b35" part={s.part} guide={s.guide} selection={s.selection} selectionKind={s.selectionKind} selectedPixelKeys={s.selectedPixelKeys}
           referencePixels={s.side === "back" ? s.referencePixels : {}} referenceOpacity={vm.frontOpacity} imageUrl={image.url} imageOpacity={image.opacity}
           imageVisible={image.visible} imageScale={image.scale} imageX={image.x} imageY={image.y} imageToolActive={panel === "image"}
           onImagePointerDown={image.down} onImagePointerMove={e => image.move(e, s.zoom)} onImagePointerUp={image.up}

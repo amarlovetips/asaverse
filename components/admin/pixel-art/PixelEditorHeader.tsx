@@ -4,6 +4,7 @@ import { Eye, Grid2X2, Minus, Plus, RotateCcw } from "lucide-react";
 import type { usePixelArtEditorController } from "./usePixelArtEditorController";
 import DesignContextPanel from "./DesignContextPanel";
 import FilterToolbarControls from "./FilterToolbarControls";
+import ArtboardSizeSelector from "./ArtboardSizeSelector";
 
 type Props = { vm: ReturnType<typeof usePixelArtEditorController> };
 
@@ -14,7 +15,7 @@ export default function PixelEditorHeader({ vm }: Props) {
       <button type="button" onClick={() => s.setSide("back")} className={`rounded px-2 py-1 text-[10px] ${s.side === "back" ? "bg-cyan-500/20 text-cyan-200" : "text-slate-500"}`}>Back</button></div>
     <DesignContextPanel name={s.name} setName={s.setName} category={s.category} setCategory={s.setPart} side={s.side} selectedId={s.activeDesignId} onSelectBackDesign={d => s.loadDesign(d, "back")}/>
     {s.side === "back" && <label className="flex items-center gap-1 rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-[10px] text-slate-400"><Eye size={13}/><input type="range" min="0.05" max="0.8" step="0.01" value={vm.frontOpacity} onChange={e => vm.setFrontOpacity(Number(e.target.value))} aria-label="Front reference opacity" className="w-16 accent-cyan-400"/>{Math.round(vm.frontOpacity * 100)}%</label>}
-    <select aria-label="Artboard size" value={s.size} onChange={e => s.setSize(+e.target.value)} className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs">{[16, 32, 64].map(n => <option key={n} value={n}>{n} × {n}</option>)}</select>
+    <ArtboardSizeSelector width={s.size} height={s.height} onPreset={s.setSize} onCustom={s.setArtboardSize}/>
     <button type="button" aria-label="Zoom out" onClick={() => s.setZoom(Math.max(4, s.zoom - 2))} className="grid size-7 place-items-center rounded border border-slate-700 bg-slate-900"><Minus size={13}/></button>
     <span className="w-10 text-center font-mono text-[10px] text-slate-400">{Math.round(s.zoom / 12 * 100)}%</span>
     <button type="button" aria-label="Zoom in" onClick={() => s.setZoom(Math.min(32, s.zoom + 2))} className="grid size-7 place-items-center rounded border border-slate-700 bg-slate-900"><Plus size={13}/></button>

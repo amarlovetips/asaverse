@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import { Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { IdlePixelShape } from "./IdleShapeSelector";
 import type { IdlePixelTool } from "./IdlePixelToolSelector";
 import type { PixelCoordinate } from "./IdlePixelMoveControls";
@@ -18,6 +17,9 @@ type Props = {
   facePixels: Record<string, string>;
   showBody: boolean;
   showFace: boolean;
+  extraLayers?: { pixels: Record<string, string>; visible: boolean }[];
+  showPixels?: boolean;
+  overlayOpacity?: number;
   color: string;
   tool: IdlePixelTool;
   shape: IdlePixelShape;
@@ -28,10 +30,15 @@ type Props = {
 };
 
 type Point = { x: number; y: number };
+type ZoomAnchor = { x: number; y: number; pointerX: number; pointerY: number };
+type PanOrigin = { pointerId: number; x: number; y: number; left: number; top: number };
+const EMPTY_EXTRA_LAYERS: NonNullable<Props["extraLayers"]> = [];
 
-export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyPixels, facePixels, showBody, showFace, color, tool, shape, selectedPixels, onSelectPixels, onMoveSelection, onPixelsChange }: Props) {
+export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyPixels, facePixels, showBody, showFace, extraLayers = EMPTY_EXTRA_LAYERS, showPixels = true, overlayOpacity = 0.38, color, tool, shape, selectedPixels, onSelectPixels, onMoveSelection, onPixelsChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const zoomAnchor = useRef<ZoomAnchor | null>(null);
+  const panOrigin = useRef<PanOrigin | null>(null);
   const workingPixels = useRef<Record<string, string>>(pixels);
   const drawing = useRef(false);
   const startPoint = useRef<Point | null>(null);
@@ -53,13 +60,18 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
     drawGridBackground(context, extent);
 
     if (showBody) {
-      context.globalAlpha = 0.38;
+      context.globalAlpha = overlayOpacity;
       drawPixels(context, bodyPixels, size);
       context.globalAlpha = 1;
     }
     if (showFace) {
-      context.globalAlpha = 0.38;
+      context.globalAlpha = overlayOpacity;
       drawPixels(context, facePixels, size);
+      context.globalAlpha = 1;
+    }
+    for (const layer of extraLayers) if (layer.visible) {
+      context.globalAlpha = overlayOpacity;
+      drawPixels(context, layer.pixels, size);
       context.globalAlpha = 1;
     }
     const displayPixels = { ...pixels };
@@ -72,7 +84,7 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
         }
       });
     }
-    drawPixels(context, displayPixels, size);
+    if (showPixels) drawPixels(context, displayPixels, size);
 
     if (draftEnd && startPoint.current && shape !== "freehand" && tool !== "select" && tool !== "erase") {
       context.globalAlpha = 0.7;
@@ -119,20 +131,69 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
       context.strokeRect(left, top, width, height);
       context.setLineDash([]);
     }
-  }, [pixels, bodyPixels, facePixels, showBody, showFace, size, extent, color, tool, shape, draftEnd, selectedPixels, dragOffset]);
+  }, [pixels, bodyPixels, facePixels, showBody, showFace, extraLayers, showPixels, overlayOpacity, size, extent, color, tool, shape, draftEnd, selectedPixels, dragOffset]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    const anchor = zoomAnchor.current;
+    if (!viewport || !anchor) return;
+    zoomAnchor.current = null;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const viewportRect = viewport.getBoundingClientRect();
+    const canvasRect = canvas.getBoundingClientRect();
+    viewport.scrollLeft += canvasRect.left - viewportRect.left + canvasRect.width * anchor.x - anchor.pointerX;
+    viewport.scrollTop += canvasRect.top - viewportRect.top + canvasRect.height * anchor.y - anchor.pointerY;
+  }, [zoom]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     const handleWheel = (event: WheelEvent) => {
-      const nextZoom = Math.max(0.5, Math.min(4, +(zoom + (event.deltaY < 0 ? 0.25 : -0.25)).toFixed(2)));
-      if (nextZoom === zoom) return;
       event.preventDefault();
+      event.stopPropagation();
+      const delta = event.deltaY || event.deltaX;
+      if (!delta) return;
+      const nextZoom = Math.max(0.5, Math.min(4, +(zoom * Math.pow(1.0015, -delta)).toFixed(3)));
+      if (nextZoom === zoom) return;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const bounds = viewport.getBoundingClientRect();
+      if (rect) zoomAnchor.current = {
+        x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+        y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+        pointerX: event.clientX - bounds.left,
+        pointerY: event.clientY - bounds.top,
+      };
       onZoomChange(nextZoom);
     };
     viewport.addEventListener("wheel", handleWheel, { passive: false });
     return () => viewport.removeEventListener("wheel", handleWheel);
   }, [zoom, onZoomChange]);
+
+  function panStart(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    viewport.setPointerCapture(event.pointerId);
+    panOrigin.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+  }
+
+  function panMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const origin = panOrigin.current;
+    const viewport = viewportRef.current;
+    if (!origin || origin.pointerId !== event.pointerId || !viewport) return;
+    event.preventDefault();
+    viewport.scrollLeft = origin.left - (event.clientX - origin.x);
+    viewport.scrollTop = origin.top - (event.clientY - origin.y);
+  }
+
+  function panEnd(event: ReactPointerEvent<HTMLDivElement>) {
+    if (panOrigin.current?.pointerId !== event.pointerId) return;
+    panOrigin.current = null;
+    if (viewportRef.current?.hasPointerCapture(event.pointerId)) viewportRef.current.releasePointerCapture(event.pointerId);
+  }
 
   function coordinate(event: PointerEvent<HTMLCanvasElement>): Point {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -159,9 +220,10 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
     if (tool === "erase") {
       delete workingPixels.current[key];
       paintEmptyCell(context, point.x, point.y);
-      for (const overlay of [showBody ? bodyPixels : {}, showFace ? facePixels : {}]) {
+      const overlays = [showBody ? bodyPixels : {}, showFace ? facePixels : {}, ...extraLayers.filter(layer => layer.visible).map(layer => layer.pixels)];
+      for (const overlay of overlays) {
         if (/^#[0-9a-f]{6}$/i.test(overlay[key] || "")) {
-          context.globalAlpha = 0.38;
+          context.globalAlpha = overlayOpacity;
           context.fillStyle = overlay[key];
           context.fillRect(point.x * CELL, point.y * CELL, CELL, CELL);
           context.globalAlpha = 1;
@@ -172,8 +234,10 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
     }
     if (!color) return;
     workingPixels.current = { ...workingPixels.current, [key]: color };
-    context.fillStyle = color;
-    context.fillRect(point.x * CELL + 1, point.y * CELL + 1, CELL - 1, CELL - 1);
+    if (showPixels) {
+      context.fillStyle = color;
+      context.fillRect(point.x * CELL + 1, point.y * CELL + 1, CELL - 1, CELL - 1);
+    }
     dirty.current = true;
   }
 
@@ -285,21 +349,11 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
     dirty.current = false;
   }
 
-  function clear() {
-    workingPixels.current = {};
-    dirty.current = false;
-    onSelectPixels([]);
-    onPixelsChange({});
-  }
-
-  return <section className="flex h-full min-h-0 flex-col gap-2" aria-label="Pixel art board">
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div><h2 className="text-xs font-semibold text-slate-200">Pixel grid <span className="font-mono text-slate-500">{size}×{size}</span></h2><p className="mt-0.5 text-[10px] text-slate-500">Cell coordinates · bold guide every 10 cells</p></div>
-      <button type="button" title="Clear current frame" aria-label="Clear current frame" onClick={clear}
-        className="grid size-8 shrink-0 place-items-center rounded border border-slate-700 text-slate-400 hover:border-rose-700 hover:text-rose-300"><Trash2 size={15} /></button>
-    </div>
-    <div ref={viewportRef} className="flex min-h-0 flex-1 items-center justify-center overflow-auto rounded-lg border border-slate-800 bg-[#0b1018] p-2 sm:p-3">
-      <div className="mx-auto grid grid-cols-[24px_minmax(0,1fr)] grid-rows-[24px_auto] gap-x-1" style={{ width: `${zoom * 100}%`, maxWidth: zoom <= 1 ? "min(100%, 74vh)" : undefined, minWidth: zoom > 1 ? `${zoom * 100}%` : undefined }}>
+  return <section className="flex h-full min-h-0 flex-col" aria-label="Pixel art board">
+    <div ref={viewportRef} onPointerDown={panStart} onPointerMove={panMove} onPointerUp={panEnd} onPointerCancel={panEnd}
+      onLostPointerCapture={panEnd} onAuxClick={event => event.preventDefault()}
+      className="flex min-h-0 flex-1 items-start justify-start overflow-auto overscroll-contain rounded-lg border border-slate-800 bg-[#0b1018] p-2 sm:p-3">
+      <div className="m-auto grid grid-cols-[24px_minmax(0,1fr)] grid-rows-[24px_auto] gap-x-1" style={{ width: `${zoom * 100}%`, maxWidth: zoom <= 1 ? "min(100%, 74vh)" : undefined, minWidth: zoom > 1 ? `${zoom * 100}%` : undefined }}>
         <div />
         <IdleCoordinateRulers size={size} axis="x" />
         <div className="relative min-h-0">

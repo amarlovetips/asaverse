@@ -3,7 +3,10 @@
 import type { CharacterLook } from "@/lib/game-types";
 import type { PlayDesign } from "./usePlayDesigns";
 import useIdleAnimationFrame from "./useIdleAnimationFrame";
-import { getCharacterDesignSlot } from "@/lib/character-design-defaults";
+import { getCharacterDesignSlot, type CharacterLayerVisibility } from "@/lib/character-design-defaults";
+import { getWalkingFrameDurationMs, type WalkDirection } from "@/lib/character-design-json";
+import useWalkingAnimationFrame from "./useWalkingAnimationFrame";
+import { composeWalkingFrame } from "@/lib/character-design-json";
 
 type Props = {
   look: CharacterLook;
@@ -12,6 +15,10 @@ type Props = {
   showPlanet?: boolean;
   animate?: boolean;
   animationFrame?: number;
+  side?: "front" | "back";
+  walkDirection?: WalkDirection;
+  walkFrameIndex?: number;
+  visibleLayers?: CharacterLayerVisibility;
 };
 
 const categories = ["body", "face", "facial-hair", "clothing", "hair", "hat"];
@@ -21,28 +28,63 @@ function getCategory(type: string) {
   return slot === "facialHair" ? "facial-hair" : slot || type.toLowerCase().replace(/-back$/, "");
 }
 
-export default function CharacterComposite({ look, designs, size = 300, showPlanet = true, animate = true, animationFrame }: Props) {
+function isSide(design: PlayDesign, side: "front" | "back") {
+  return design.design_type.toLowerCase().endsWith("-back") === (side === "back");
+}
+
+export default function CharacterComposite({ look, designs, size = 300, showPlanet = true, animate = true, animationFrame, side = "front", walkDirection, walkFrameIndex, visibleLayers }: Props) {
   const parts = look.parts || {};
+  const sideDesigns = side === "front" ? designs : designs.map(design => {
+    if (isSide(design, "back") || !Object.keys(design.back_pixel_data || {}).length) return design;
+    const hasPairedBack = designs.some(other => isSide(other, "back") &&
+      getCategory(other.design_type) === getCategory(design.design_type) && other.design_name === design.design_name);
+    if (hasPairedBack) return design;
+    return {
+      ...design, design_type: `${design.design_type.replace(/-back$/i, "")}-back`,
+      pixel_data: design.back_pixel_data || {}, idle_frames: design.back_idle_frames,
+      walking_animation: design.back_walking_animation,
+    };
+  });
   const selected = categories.map(category => {
     const key = category === "facial-hair" ? "facialHair" : category;
     const id = parts[key as keyof typeof parts];
-    const chosen = designs.find(d =>
+    const chosen = sideDesigns.find(d =>
       d.id === id &&
       getCategory(d.design_type) === category &&
-      !d.design_type.toLowerCase().endsWith("-back")
+      isSide(d, side)
     );
     if (chosen) return chosen;
+    const sideMatch = sideDesigns.find(d => getCategory(d.design_type) === category && isSide(d, side));
+    if (sideMatch) return sideMatch;
+    if (side === "back") {
+      const frontFallback = designs.find(d => getCategory(d.design_type) === category && isSide(d, "front"));
+      if (frontFallback) return frontFallback;
+    }
     if ((category === "face" || category === "body") && parts[key as keyof typeof parts] !== null)
-      return designs.find(d =>
+      return sideDesigns.find(d =>
         getCategory(d.design_type) === category &&
-        !d.design_type.toLowerCase().endsWith("-back")
+        isSide(d, side)
       );
     return undefined;
-  }).filter((d): d is PlayDesign => Boolean(d));
-  const autoFrame = useIdleAnimationFrame(animate && selected.some(design =>
-    (getCategory(design.design_type) === "body" || getCategory(design.design_type) === "face") && design.idle_frames?.length === 3
-  ));
+  }).filter((d): d is PlayDesign => Boolean(d))
+    .filter(design => {
+      const slot = getCharacterDesignSlot(design.design_type);
+      return !visibleLayers || !slot || slot === "hat" || visibleLayers[slot];
+    });
+  const idleCount = Math.max(0, ...selected.map(d => d.idle_frames?.length || 0));
+  const autoFrame = useIdleAnimationFrame(animate && idleCount > 0, 420, idleCount);
   const displayedFrame = animationFrame ?? autoFrame;
+  const walkingParts = selected.filter(design => {
+    const category = getCategory(design.design_type);
+    return (category === "body" || category === "clothing") &&
+      Boolean(walkDirection && design.walking_animation?.directions.includes(walkDirection));
+  });
+  const walkCount = Math.max(0, ...walkingParts.map(design => design.walking_animation?.frames.length || 0));
+  const walkDuration = getWalkingFrameDurationMs(walkDirection,
+    walkingParts.find(design => getCategory(design.design_type) === "body")?.walking_animation,
+    walkingParts.find(design => getCategory(design.design_type) === "clothing")?.walking_animation);
+  const currentWalkFrame = useWalkingAnimationFrame(Boolean(walkDirection && walkFrameIndex === undefined && walkCount), walkCount, walkDuration);
+  const activeWalkFrame = walkFrameIndex ?? currentWalkFrame;
 
   if (!selected.length) return null;
 
@@ -73,9 +115,17 @@ export default function CharacterComposite({ look, designs, size = 300, showPlan
       )}
 
       {selected.map(design => {
-        const framePixels = displayedFrame === undefined || (getCategory(design.design_type) !== "body" && getCategory(design.design_type) !== "face")
-          ? undefined
-          : design.idle_frames?.[displayedFrame]?.pixelData;
+        const category = getCategory(design.design_type);
+        const walking = (category === "body" || category === "clothing") && walkDirection && design.walking_animation?.directions.includes(walkDirection);
+        const walk = design.walking_animation;
+        const walkFrame = walk?.frames[activeWalkFrame % (walk.frames.length || 1)];
+        const baseIndex = walking && walk?.basePose === "idle-cycle" ? activeWalkFrame : displayedFrame;
+        const baseFrame = design.idle_frames?.length ? design.idle_frames[Number(baseIndex || 0) % design.idle_frames.length]?.pixelData : design.pixel_data;
+        const synchronizedIdleFrame = walkDirection && walkingParts.length ? activeWalkFrame : displayedFrame;
+        const framePixels = walking && walkFrame
+          ? composeWalkingFrame(baseFrame || {}, walkFrame, walk?.basePose)
+          : synchronizedIdleFrame === undefined || (category !== "body" && category !== "face" && category !== "hair" && category !== "facial-hair" && category !== "clothing") ? undefined
+            : design.idle_frames?.length ? design.idle_frames[synchronizedIdleFrame % design.idle_frames.length]?.pixelData : undefined;
         return (
         <g key={design.id} transform={`translate(${design.position_x || 0} ${((design.position_y || 0) - 1)})`}>
           {Object.entries(framePixels || design.pixel_data || {}).map(([point, color]) => {
