@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { IdlePixelShape } from "./IdleShapeSelector";
 import type { IdlePixelTool } from "./IdlePixelToolSelector";
 import type { PixelCoordinate } from "./IdlePixelMoveControls";
@@ -43,16 +43,33 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
   const drawing = useRef(false);
   const startPoint = useRef<Point | null>(null);
   const previousPoint = useRef<Point | null>(null);
-  const selectionStart = useRef<Point | null>(null);
+  const marquee = useRef<{ start: Point; end: Point } | null>(null);
   const draggingSelection = useRef(false);
   const dragOrigin = useRef<Point | null>(null);
+  const dragOffset = useRef<Point>({ x: 0, y: 0 });
+  const shapeEnd = useRef<Point | null>(null);
+  const pointerBounds = useRef<DOMRect | null>(null);
   const dirty = useRef(false);
-  const [draftEnd, setDraftEnd] = useState<Point | null>(null);
-  const [dragOffset, setDragOffset] = useState<Point>({ x: 0, y: 0 });
+  const drawRef = useRef<() => void>(() => {});
+  const drawFrame = useRef(0);
   const extent = size * CELL;
 
-  useEffect(() => {
-    workingPixels.current = pixels;
+  // Redraws are coalesced into one animation frame so pointer movement never
+  // triggers React re-renders or duplicate canvas paints.
+  function scheduleDraw() {
+    if (drawFrame.current) return;
+    drawFrame.current = requestAnimationFrame(() => {
+      drawFrame.current = 0;
+      drawRef.current();
+    });
+  }
+
+  useEffect(() => () => {
+    if (drawFrame.current) cancelAnimationFrame(drawFrame.current);
+    drawFrame.current = 0;
+  }, []);
+
+  function draw() {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
@@ -74,64 +91,53 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
       drawPixels(context, layer.pixels, size);
       context.globalAlpha = 1;
     }
-    const displayPixels = { ...pixels };
-    if (draggingSelection.current && (dragOffset.x || dragOffset.y)) {
-      const moved = selectedPixels.map(point => ({ x: point.x + dragOffset.x, y: point.y + dragOffset.y }));
-      selectedPixels.forEach(point => delete displayPixels[point.x + "," + point.y]);
-      moved.forEach((point, index) => {
-        if (point.x >= 0 && point.y >= 0 && point.x < size && point.y < size) {
-          displayPixels[point.x + "," + point.y] = pixels[selectedPixels[index].x + "," + selectedPixels[index].y];
-        }
-      });
+    let displayPixels = pixels;
+    if (draggingSelection.current && (dragOffset.current.x || dragOffset.current.y)) {
+      displayPixels = { ...pixels };
+      for (const point of selectedPixels) delete displayPixels[point.x + "," + point.y];
+      for (const point of selectedPixels) {
+        const x = point.x + dragOffset.current.x;
+        const y = point.y + dragOffset.current.y;
+        if (x >= 0 && y >= 0 && x < size && y < size) displayPixels[x + "," + y] = pixels[point.x + "," + point.y];
+      }
     }
     if (showPixels) drawPixels(context, displayPixels, size);
 
-    if (draftEnd && startPoint.current && shape !== "freehand" && tool !== "select" && tool !== "erase") {
+    if (shapeEnd.current && startPoint.current && shape !== "freehand" && tool !== "select" && tool !== "erase") {
       context.globalAlpha = 0.7;
       context.fillStyle = color || "#ffffff";
-      for (const point of shapePoints(startPoint.current, draftEnd, shape)) {
+      for (const point of shapePoints(startPoint.current, shapeEnd.current, shape)) {
         context.fillRect(point.x * CELL + 1, point.y * CELL + 1, CELL - 1, CELL - 1);
       }
       context.globalAlpha = 1;
     }
 
-    for (let index = 0; index <= size; index++) {
-      const major = index % 10 === 0;
-      const coordinate = index * CELL + 0.5;
-      context.beginPath();
-      context.strokeStyle = major ? "rgba(203, 213, 225, 0.30)" : "rgba(203, 213, 225, 0.14)";
-      context.lineWidth = major ? 1 : 0.5;
-      context.moveTo(coordinate, 0);
-      context.lineTo(coordinate, extent);
-      context.moveTo(0, coordinate);
-      context.lineTo(extent, coordinate);
-      context.stroke();
-    }
-    if (selectedPixels.length) {
-      context.fillStyle = "rgba(250, 204, 21, 0.12)";
-      context.strokeStyle = "#facc15";
-      context.lineWidth = 1.5;
-      context.setLineDash([3, 2]);
-      for (const pixel of selectedPixels) {
-        const x = pixel.x + (draggingSelection.current ? dragOffset.x : 0);
-        const y = pixel.y + (draggingSelection.current ? dragOffset.y : 0);
-        context.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
-        context.strokeRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
-      }
-      context.setLineDash([]);
-    }
-    if (selectionStart.current && draftEnd && !draggingSelection.current) {
+    drawGridLines(context, size, extent);
+
+    const activeMarquee = marquee.current;
+    if (activeMarquee && !draggingSelection.current) {
+      drawSelectionOutline(context, pixelsInRectangle(activeMarquee.start, activeMarquee.end, pixels), { x: 0, y: 0 });
       context.strokeStyle = "#facc15";
       context.lineWidth = 1.5;
       context.setLineDash([4, 3]);
-      const left = Math.min(selectionStart.current.x, draftEnd.x) * CELL + 1;
-      const top = Math.min(selectionStart.current.y, draftEnd.y) * CELL + 1;
-      const width = (Math.abs(selectionStart.current.x - draftEnd.x) + 1) * CELL - 2;
-      const height = (Math.abs(selectionStart.current.y - draftEnd.y) + 1) * CELL - 2;
-      context.strokeRect(left, top, width, height);
+      context.strokeRect(
+        Math.min(activeMarquee.start.x, activeMarquee.end.x) * CELL + 1,
+        Math.min(activeMarquee.start.y, activeMarquee.end.y) * CELL + 1,
+        (Math.abs(activeMarquee.start.x - activeMarquee.end.x) + 1) * CELL - 2,
+        (Math.abs(activeMarquee.start.y - activeMarquee.end.y) + 1) * CELL - 2,
+      );
       context.setLineDash([]);
+    } else if (selectedPixels.length) {
+      drawSelectionOutline(context, selectedPixels, draggingSelection.current ? dragOffset.current : { x: 0, y: 0 });
     }
-  }, [pixels, bodyPixels, facePixels, showBody, showFace, extraLayers, showPixels, overlayOpacity, size, extent, color, tool, shape, draftEnd, selectedPixels, dragOffset]);
+  }
+
+  useLayoutEffect(() => {
+    workingPixels.current = pixels;
+    drawRef.current = draw;
+    draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pixels, bodyPixels, facePixels, showBody, showFace, extraLayers, showPixels, overlayOpacity, size, extent, color, tool, shape, selectedPixels]);
 
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
@@ -195,12 +201,15 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
     if (viewportRef.current?.hasPointerCapture(event.pointerId)) viewportRef.current.releasePointerCapture(event.pointerId);
   }
 
-  function coordinate(event: PointerEvent<HTMLCanvasElement>): Point {
-    const rect = event.currentTarget.getBoundingClientRect();
+  function coordinateFromBounds(clientX: number, clientY: number, rect: DOMRect): Point {
     return {
-      x: Math.max(0, Math.min(size - 1, Math.floor((event.clientX - rect.left) / rect.width * size))),
-      y: Math.max(0, Math.min(size - 1, Math.floor((event.clientY - rect.top) / rect.height * size))),
+      x: Math.max(0, Math.min(size - 1, Math.floor((clientX - rect.left) / rect.width * size))),
+      y: Math.max(0, Math.min(size - 1, Math.floor((clientY - rect.top) / rect.height * size))),
     };
+  }
+
+  function boundsFor(event: PointerEvent<HTMLCanvasElement>): DOMRect {
+    return pointerBounds.current || event.currentTarget.getBoundingClientRect();
   }
 
   function moveWithKeyboard(event: KeyboardEvent<HTMLCanvasElement>) {
@@ -254,20 +263,21 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
 
   function start(event: PointerEvent<HTMLCanvasElement>) {
     if (event.button !== 0) return;
-    const point = coordinate(event);
+    const rect = event.currentTarget.getBoundingClientRect();
+    pointerBounds.current = rect;
+    const point = coordinateFromBounds(event.clientX, event.clientY, rect);
     if (tool === "select") {
       event.currentTarget.focus({ preventScroll: true });
       const selectionKeys = new Set(selectedPixels.map(pixel => pixel.x + "," + pixel.y));
       const pointKey = point.x + "," + point.y;
       if (event.shiftKey || event.ctrlKey || event.metaKey) {
-        const clickedPixels = pixelsInRectangle(point, point, pixels);
         const nextSelection = new Map(selectedPixels.map(pixel => [pixel.x + "," + pixel.y, pixel]));
-        for (const pixel of clickedPixels) {
-          const key = pixel.x + "," + pixel.y;
-          if ((event.ctrlKey || event.metaKey) && nextSelection.has(key)) nextSelection.delete(key);
-          else nextSelection.set(key, pixel);
+        if (pixels[pointKey] !== undefined) {
+          if ((event.ctrlKey || event.metaKey) && nextSelection.has(pointKey)) nextSelection.delete(pointKey);
+          else nextSelection.set(pointKey, point);
         }
         onSelectPixels([...nextSelection.values()]);
+        pointerBounds.current = null;
         return;
       }
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -275,20 +285,20 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
       if (selectionKeys.has(pointKey)) {
         draggingSelection.current = true;
         dragOrigin.current = point;
-        setDragOffset({ x: 0, y: 0 });
+        dragOffset.current = { x: 0, y: 0 };
       } else {
         draggingSelection.current = false;
-        selectionStart.current = point;
-        setDraftEnd(point);
-        onSelectPixels(pixelsInRectangle(point, point, pixels));
+        marquee.current = { start: point, end: point };
       }
+      scheduleDraw();
       return;
     }
     if (shape !== "freehand" && tool === "paint") {
       startPoint.current = point;
-      setDraftEnd(point);
+      shapeEnd.current = point;
       event.currentTarget.setPointerCapture(event.pointerId);
       drawing.current = true;
+      scheduleDraw();
       return;
     }
     const context = event.currentTarget.getContext("2d");
@@ -296,23 +306,25 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
     event.currentTarget.setPointerCapture(event.pointerId);
     drawing.current = true;
     previousPoint.current = point;
+    workingPixels.current = { ...workingPixels.current };
     paintSegment(context, point, point);
   }
 
   function move(event: PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current) return;
-    const point = coordinate(event);
+    const point = coordinateFromBounds(event.clientX, event.clientY, boundsFor(event));
     if (tool === "select") {
       if (draggingSelection.current && dragOrigin.current) {
-        setDragOffset({ x: point.x - dragOrigin.current.x, y: point.y - dragOrigin.current.y });
-      } else if (selectionStart.current) {
-        setDraftEnd(point);
-        onSelectPixels(pixelsInRectangle(selectionStart.current, point, pixels));
-      }
+        dragOffset.current = { x: point.x - dragOrigin.current.x, y: point.y - dragOrigin.current.y };
+      } else if (marquee.current) {
+        marquee.current = { start: marquee.current.start, end: point };
+      } else return;
+      scheduleDraw();
       return;
     }
     if (shape !== "freehand" && tool === "paint") {
-      setDraftEnd(point);
+      shapeEnd.current = point;
+      scheduleDraw();
       return;
     }
     if (!previousPoint.current) return;
@@ -325,28 +337,35 @@ export default function IdlePixelBoard({ size, zoom, onZoomChange, pixels, bodyP
   function finish(event: PointerEvent<HTMLCanvasElement>) {
     if (!drawing.current) return;
     if (tool === "select") {
-      if (draggingSelection.current && (dragOffset.x || dragOffset.y)) onMoveSelection(dragOffset.x, dragOffset.y);
+      const activeMarquee = marquee.current;
+      const offset = dragOffset.current;
       drawing.current = false;
       draggingSelection.current = false;
       dragOrigin.current = null;
-      selectionStart.current = null;
-      setDragOffset({ x: 0, y: 0 });
-      setDraftEnd(null);
+      marquee.current = null;
+      dragOffset.current = { x: 0, y: 0 };
+      pointerBounds.current = null;
+      if (activeMarquee) onSelectPixels(pixelsInRectangle(activeMarquee.start, activeMarquee.end, pixels));
+      else if (offset.x || offset.y) onMoveSelection(offset.x, offset.y);
+      scheduleDraw();
       return;
     }
-    const endpoint = coordinate(event);
+    const endpoint = coordinateFromBounds(event.clientX, event.clientY, boundsFor(event));
     if (shape !== "freehand" && tool === "paint" && startPoint.current) {
       const context = event.currentTarget.getContext("2d");
       if (context) {
+        workingPixels.current = { ...workingPixels.current };
         for (const point of shapePoints(startPoint.current, endpoint, shape)) setPixel(context, point);
       }
     }
     drawing.current = false;
     previousPoint.current = null;
     startPoint.current = null;
-    setDraftEnd(null);
+    shapeEnd.current = null;
+    pointerBounds.current = null;
     if (dirty.current) onPixelsChange(workingPixels.current);
     dirty.current = false;
+    scheduleDraw();
   }
 
   return <section className="flex h-full min-h-0 flex-col" aria-label="Pixel art board">
@@ -384,20 +403,94 @@ function drawGridBackground(context: CanvasRenderingContext2D, extent: number) {
   context.fillRect(0, 0, extent, extent);
 }
 
+function drawGridLines(context: CanvasRenderingContext2D, size: number, extent: number) {
+  context.strokeStyle = "rgba(203, 213, 225, 0.14)";
+  context.lineWidth = 0.5;
+  context.beginPath();
+  for (let index = 0; index <= size; index++) {
+    if (index % 10 === 0) continue;
+    const coordinate = index * CELL + 0.5;
+    context.moveTo(coordinate, 0);
+    context.lineTo(coordinate, extent);
+    context.moveTo(0, coordinate);
+    context.lineTo(extent, coordinate);
+  }
+  context.stroke();
+  context.strokeStyle = "rgba(203, 213, 225, 0.30)";
+  context.lineWidth = 1;
+  context.beginPath();
+  for (let index = 0; index <= size; index += 10) {
+    const coordinate = index * CELL + 0.5;
+    context.moveTo(coordinate, 0);
+    context.lineTo(coordinate, extent);
+    context.moveTo(0, coordinate);
+    context.lineTo(extent, coordinate);
+  }
+  context.stroke();
+}
+
+// Fills merged horizontal runs and strokes only the union boundary in one
+// batched path, so large selections stay cheap to draw.
+function drawSelectionOutline(context: CanvasRenderingContext2D, points: PixelCoordinate[], offset: Point) {
+  if (!points.length) return;
+  const keys = new Set<string>();
+  const rows = new Map<number, number[]>();
+  for (const point of points) {
+    keys.add(point.x + "," + point.y);
+    const row = rows.get(point.y);
+    if (row) row.push(point.x);
+    else rows.set(point.y, [point.x]);
+  }
+  context.fillStyle = "rgba(250, 204, 21, 0.12)";
+  for (const [y, xs] of rows) {
+    xs.sort((a, b) => a - b);
+    let runStart = xs[0];
+    for (let index = 1; index <= xs.length; index++) {
+      if (index === xs.length || xs[index] !== xs[index - 1] + 1) {
+        const width = (xs[index - 1] - runStart + 1) * CELL - 2;
+        if (width > 0) context.fillRect((runStart + offset.x) * CELL + 1, (y + offset.y) * CELL + 1, width, CELL - 2);
+        if (index < xs.length) runStart = xs[index];
+      }
+    }
+  }
+  context.strokeStyle = "#facc15";
+  context.lineWidth = 1.5;
+  context.setLineDash([3, 2]);
+  context.beginPath();
+  for (const point of points) {
+    const x = point.x + offset.x;
+    const y = point.y + offset.y;
+    const left = x * CELL + 1;
+    const top = y * CELL + 1;
+    const right = (x + 1) * CELL - 1;
+    const bottom = (y + 1) * CELL - 1;
+    if (!keys.has((x - offset.x - 1) + "," + (y - offset.y))) { context.moveTo(left, top); context.lineTo(left, bottom); }
+    if (!keys.has((x - offset.x + 1) + "," + (y - offset.y))) { context.moveTo(right, top); context.lineTo(right, bottom); }
+    if (!keys.has((x - offset.x) + "," + (y - offset.y - 1))) { context.moveTo(left, top); context.lineTo(right, top); }
+    if (!keys.has((x - offset.x) + "," + (y - offset.y + 1))) { context.moveTo(left, bottom); context.lineTo(right, bottom); }
+  }
+  context.stroke();
+  context.setLineDash([]);
+}
+
 function paintEmptyCell(context: CanvasRenderingContext2D, x: number, y: number) {
   context.fillStyle = "#202832";
   context.fillRect(x * CELL, y * CELL, CELL, CELL);
 }
 
-function pixelsInRectangle(start: Point, end: Point, pixels: Record<string, string>): Point[] {
+// Bounded by the rectangle area instead of scanning every pixel key.
+function pixelsInRectangle(start: Point, end: Point, pixels: Record<string, string>): PixelCoordinate[] {
   const left = Math.min(start.x, end.x);
   const right = Math.max(start.x, end.x);
   const top = Math.min(start.y, end.y);
   const bottom = Math.max(start.y, end.y);
-  return Object.keys(pixels).flatMap(key => {
-    const [x, y] = key.split(",").map(Number);
-    return Number.isInteger(x) && Number.isInteger(y) && x >= left && x <= right && y >= top && y <= bottom ? [{ x, y }] : [];
-  });
+  const points: PixelCoordinate[] = [];
+  for (let y = top; y <= bottom; y++) {
+    for (let x = left; x <= right; x++) {
+      if (pixels[x + "," + y] !== undefined) points.push({ x, y });
+    }
+  }
+  return points;
 }
 
 function shapePoints(start: Point, end: Point, shape: IdlePixelShape): Point[] {

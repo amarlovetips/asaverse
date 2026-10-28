@@ -2,6 +2,7 @@
 import { useState, useCallback } from "react";
 import { createClient } from "../../../lib/supabase";
 import type { Design } from "./components/DesignList";
+import { isCharacterDesignType } from "./filterDesigns";
 import { mergeDesignPixels } from "@/lib/character-design-json";
 import { getCharacterDesignSlot } from "@/lib/character-design-defaults";
 
@@ -35,7 +36,11 @@ export function useCharacterDesigns() {
     const { data, error } = await db.from("character_designs")
       .select("*").order("updated_at", { ascending: false });
     if (error) throw error;
-    setItems((data || []) as Design[]);
+    // Strictly filter out any non-character designs (tiles, objects, grass, etc.)
+    const characterOnly = (data || []).filter((row: { design_type?: string }) =>
+      isCharacterDesignType(row.design_type || "")
+    );
+    setItems(characterOnly as Design[]);
   });
 
   const toggle = (d: Design) => run(async db => {
@@ -86,6 +91,7 @@ export function useCharacterDesigns() {
       ? { ...x, is_default_base: x.id === d.id, is_published: x.id === d.id ? true : x.is_published }
       : x));
   });
+
   const saveSide = async (
     d: Design, side: "front" | "back", pixels: Record<string, string>
   ): Promise<boolean> => {

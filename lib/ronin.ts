@@ -16,5 +16,8 @@ export const config = createConfig({
   chains: [ronin, saigon],
   connectors: [injected()],
   multiInjectedProviderDiscovery: true,
+  // Next.js App Router: avoids SSR/client hydration mismatches in reconnect
+  // state; wallet reconnection itself stays silent on mount.
+  ssr: true,
   transports: { [ronin.id]: http(), [saigon.id]: http() },
 });

@@ -32,7 +32,6 @@ export default function CharactersWorkspace() {
   useEffect(() => { setPage(1); }, [category, status]);
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
 
-
   return <section className="h-full space-y-4 overflow-auto p-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div><h2 className="text-xl font-bold">Character Designs</h2>
@@ -60,7 +59,7 @@ export default function CharactersWorkspace() {
         }
       }}
     /> : <DesignList items={shown} onEdit={setEditing}
-      onDelete={setDeleting} onToggle={api.toggle} onDefault={api.setDefault} allowDelete={status === "unpublished"}/>}
+      onDelete={setDeleting} onToggle={api.toggle} onDefault={api.setDefault} allowDelete={true}/>}
     {deleting && <DeleteConfirm name={deleting.design_name}
       onCancel={() => setDeleting(null)}
       onConfirm={async () => {

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { extractDesignPixels, readDesignSidePixels, readEmbeddedIdleFrames, readEmbeddedWalkingAnimation } from "@/lib/character-design-json";
 import type { IdleAnimationFrameJson, WalkingAnimationJson } from "@/lib/character-design-json";
+import { isCharacterDesignType } from "@/components/admin/characters/filterDesigns";
 
 export type PlayDesign = {
   id: string;
@@ -61,6 +62,7 @@ export function usePlayDesigns() {
         if (error) throw error;
 
         for (const d of data || []) {
+          if (!isCharacterDesignType(d.design_type)) continue;
           result.push({ ...d, pixel_data: extractDesignPixels(d.pixel_data, d.canvas_width) || {}, idle_frames: readEmbeddedIdleFrames(d.pixel_data, "front", false, d.canvas_width), walking_animation: readEmbeddedWalkingAnimation(d.pixel_data, "front", false, d.canvas_width), back_pixel_data: readDesignSidePixels(d.pixel_data, "back", d.canvas_width), back_idle_frames: readEmbeddedIdleFrames(d.pixel_data, "back", true, d.canvas_width), back_walking_animation: readEmbeddedWalkingAnimation(d.pixel_data, "back", true, d.canvas_width), source: "supabase" });
         }
       }
@@ -78,6 +80,7 @@ export function usePlayDesigns() {
           const json = await res.json();
           const d = json.design;
           if (!d?.pixel_data) return null;
+          if (!isCharacterDesignType(d.design_type || "")) return null;
 
           return {
             id: `github-${index}-${d.design_name || "design"}`,

@@ -88,8 +88,10 @@ export default function DesignList({ items, onEdit, onDelete, onToggle, onDefaul
         className="rounded bg-cyan-800 px-2 py-1 text-xs">
         {d.is_published ? "Unpublish" : "Publish"}
       </button>
-      <button onClick={() => onDefault(d)} className={`rounded px-2 py-1 text-xs ${d.is_default_base ? "bg-amber-700" : "bg-slate-700"}`}>{d.is_default_base ? "Unset Default" : "Set Default"}</button>
-      {allowDelete && <button onClick={() => onDelete(d)}
+      {d.is_published && (
+        <button onClick={() => onDefault(d)} className={`rounded px-2 py-1 text-xs ${d.is_default_base ? "bg-amber-700" : "bg-slate-700"}`}>{d.is_default_base ? "Unset Default" : "Set Default"}</button>
+      )}
+      {!d.is_published && allowDelete && <button onClick={() => onDelete(d)}
         className="rounded bg-red-900 px-2 py-1 text-xs">Delete</button>}
     </article>)}
   </div>;

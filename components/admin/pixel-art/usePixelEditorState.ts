@@ -35,7 +35,11 @@ function composeText(pixels:Pixels,layers:PixelTextLayer[],width:number,height:n
  return layers.reduce((result,layer)=>({...result,...artboardTextPixels(layer.text,layer.x,layer.y,layer.color,width,height,layer.scale)}),{...pixels});
 }
 
-export function usePixelEditorState() {
+export type PixelEditorOptions = { categories?: string[] };
+const CHARACTER_CATEGORIES = ["body", "face", "facial-hair", "hair", "clothing", "outfit"];
+
+export function usePixelEditorState(options?: PixelEditorOptions) {
+ const allowedCategories = options?.categories ?? CHARACTER_CATEGORIES;
  const [name,setName]=useState("");
  const [activeDesignId,setActiveDesignId]=useState<string|null>(null);
  const [part,setPartState]=useState("body");
@@ -80,7 +84,7 @@ export function usePixelEditorState() {
  const draw=usePixelDrawing(size,color,tool,height);
  const renderedPixels=useMemo(()=>textLayers.reduce((pixels,layer)=>({...pixels,...artboardTextPixels(layer.text,layer.x,layer.y,layer.color,size,height,layer.scale)}),{...draw.pixels}),[draw.pixels,textLayers,size,height]);
 
- useEffect(()=>{let live=true;async function loadBase(){try{const db=createClient();const {data:{user}}=await db.auth.getUser();if(!user)return;const {data,error}=await db.from("character_designs").select("pixel_data").eq("user_id",user.id).eq("design_type","base-body").eq("is_default_base",true).maybeSingle();if(live&&!error&&data){const pixels=(data.pixel_data||{}) as Pixels;boards.current["base-body"]=pixels;setBoardPixels(old=>({...old,"base-body":pixels}));}}catch{}}void loadBase();return()=>{live=false;};},[]);
+ useEffect(()=>{if(options?.categories)return;let live=true;async function loadBase(){try{const db=createClient();const {data:{user}}=await db.auth.getUser();if(!user)return;const {data,error}=await db.from("character_designs").select("pixel_data").eq("user_id",user.id).eq("design_type","base-body").eq("is_default_base",true).maybeSingle();if(live&&!error&&data){const pixels=(data.pixel_data||{}) as Pixels;boards.current["base-body"]=pixels;setBoardPixels(old=>({...old,"base-body":pixels}));}}catch{}}void loadBase();return()=>{live=false;};},[options?.categories]);
 
  function writePixels(pixels:Pixels){boards.current[part]=pixels;setBoardPixels(old=>({...old,[part]:pixels}));draw.setPixels(pixels);}
  function editAllowed(x:number,y:number){
@@ -102,7 +106,7 @@ export function usePixelEditorState() {
  function remember(){draw.remember();histories.current[part]=[...draw.history,draw.pixels].slice(-30);}
  function setPart(v:string){
   const category=v.endsWith("-back")?v.slice(0,-5):v;
-  if(!["body","face","facial-hair","hair","clothing","outfit"].includes(category)&&v!=="back-side")return;
+  if(!allowedCategories.includes(category)&&v!=="back-side")return;
   const target=v.endsWith("-back")||v==="back-side"?v:(side==="back"?`${v}-back`:v);
   if(target!==part){setActiveDesignId(null);designJson.current=null;setReferencePixels({});}
   boards.current[part]=draw.pixels;histories.current[part]=draw.history;
@@ -136,7 +140,8 @@ export function usePixelEditorState() {
  function setPixels(p:Pixels){writePixels(p);}
  function loadDesign(d:{id:string;design_name:string;design_type:string;canvas_width:number;canvas_height?:number;pixel_data:unknown},requestedSide?:"front"|"back"){
   const designHeight=d.canvas_height||d.canvas_width;
-  if(!ARTBOARDS.includes(d.design_type)||!validArtboardDimensions(d.canvas_width,designHeight))return;
+  const typeAllowed = options?.categories ? true : ARTBOARDS.includes(d.design_type);
+  if(!typeAllowed||!validArtboardDimensions(d.canvas_width,designHeight))return;
   const baseType=d.design_type.replace(/-back$/,""),targetSide=requestedSide||(d.design_type.endsWith("-back")?"back":"front");
   const target=targetSide==="back"?`${baseType}-back`:baseType,pixels=readArtboardSide(d.pixel_data,targetSide,d.canvas_width,designHeight);
   boards.current[part]=draw.pixels;histories.current[part]=draw.history;

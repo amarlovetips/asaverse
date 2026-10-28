@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { usePixelEditorState } from "./usePixelEditorState";
+import { usePixelEditorState, type PixelEditorOptions } from "./usePixelEditorState";
 import { useReferenceImage } from "./useReferenceImage";
 import { usePixelEditorShortcuts } from "./usePixelEditorShortcuts";
 import type { ReferenceTool } from "./ReferenceToolRail";
@@ -9,8 +9,8 @@ import type { ReferenceTool } from "./ReferenceToolRail";
 export type EditorPanel = "tools" | "image" | "save" | "load" | "publish" | "export" | "base" | "history";
 const colors = ["#171923", "#ffffff", "#f2c49b", "#754631", "#392447", "#d65b82", "#19b9ad", "#4168d9", "#b8476a", "#d69a38", "#794bd0", "#e6e6ee", "#38d9ee", "#4ae08e", "#000000", "#888888"];
 
-export function usePixelArtEditorController() {
-  const s = usePixelEditorState();
+export function usePixelArtEditorController(options?: PixelEditorOptions) {
+  const s = usePixelEditorState(options);
   const [confirmClear, setConfirmClear] = useState(false), [panel, setPanel] = useState<EditorPanel>("tools");
   const [colorLayer, setColorLayer] = useState<{ scope: string; layer: "fill" | "border" }>({ scope: "", layer: "border" });
   const scope = `${s.part}:${s.side}`;

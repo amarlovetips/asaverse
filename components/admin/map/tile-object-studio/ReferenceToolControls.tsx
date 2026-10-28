@@ -1,0 +1,29 @@
+"use client";
+
+import { useState } from "react";
+import type { Props } from "./ReferenceToolControlTypes";
+import StrokeWidthControl from "./StrokeWidthControl";
+import SelectionActionsPanel from "./SelectionActionsPanel";
+import { FillToggle, TextEditor, Title, ToolCard } from "./ToolControlParts";
+
+export default function ReferenceToolControls(p: Props) {
+  const [draftText, setDraftText] = useState("ASA");
+  const [draftScale, setDraftScale] = useState(1);
+  const text=p.activeText?.text??draftText,textScale=p.activeText?.scale??draftScale;
+  const [perspective, setPerspective] = useState(8);
+  const field = "w-full rounded-md border border-slate-700 bg-slate-950 px-2.5 py-2 text-xs text-slate-100 outline-none focus:border-cyan-400";
+  if (["line", "rectangle", "circle"].includes(p.tool)) return <div className="space-y-2"><StrokeWidthControl value={p.strokeWidth} onChange={p.onStrokeWidthChange}/><ToolCard title={p.tool === "line" ? "Line Tool" : p.tool === "rectangle" ? "Rectangle / Square" : "Circle / Ellipse"}><p>{p.tool === "line" ? "Drag between points to draw a pixel-grid line." : "Drag across the bounds to draw an outline or filled shape."} Stroke thickness is measured in artboard pixels.</p></ToolCard></div>;
+  if (p.tool === "polygon") return <div className="space-y-2 rounded-lg border border-slate-700 bg-[#0c121b] p-3 text-xs"><Title>Polygon Tool</Title><p className="text-slate-400">Click each corner, then finish the polygon to close it.</p><p className="text-slate-500">{p.polygonCount} points placed</p><FillToggle filled={p.shapeFilled} onToggle={p.onToggleFilled}/><button type="button" disabled={p.polygonCount < 3} onClick={p.onFinishPolygon} className="w-full rounded-md bg-cyan-500/15 px-3 py-2 font-semibold text-cyan-200 disabled:opacity-40">Finish Polygon</button></div>;
+  if (p.tool === "select" || p.tool === "magic") return <div className="space-y-2 rounded-lg border border-slate-700 bg-[#0c121b] p-3 text-xs"><Title>{p.tool === "magic" ? "Magic Wand" : "Selection Tool"}</Title>{p.tool === "magic"&&<p className="text-slate-400">Click a pixel to select every matching RGBA pixel on this artboard, including disconnected and transparent pixels. Use the color picker to recolor the selection.</p>}{p.tool === "select"&&p.activeText&&<TextEditor text={text} scale={textScale} field={field} setText={value=>{setDraftText(value);p.onEditText(value);}} setScale={value=>{setDraftScale(value);p.onScaleText(value);}}/>}<SelectionActionsPanel selection={p.selection} kind={p.selectionKind} onClear={p.onClearSelection} onSelectAll={p.onSelectAll} onInvert={p.onInvertSelection} onCopy={p.onCopySelection} onCut={p.onCutSelection} onPaste={p.onPasteSelection} onDelete={p.onDeleteSelection} onTransform={p.onTransformSelection}/>{p.selection&&p.tool==="select"&&!p.activeText&&p.selectionKind!=="magic"&&<button type="button" onClick={()=>p.onApplySelectionFill(p.shapeFillColor)} className="w-full rounded-md border border-cyan-800/70 px-2 py-2 text-cyan-200">{p.shapeFillColor===null?"Remove Fill from Selection":"Apply Fill to Selection"}</button>}</div>;
+  if (p.tool === "text") return <div className="space-y-2 rounded-lg border border-slate-700 bg-[#0c121b] p-3 text-xs"><Title>Pixel Text</Title><p className="text-slate-400">Click blank canvas to add text. Select existing text to edit or move it.</p><TextEditor text={text} scale={textScale} field={field} setText={value=>{setDraftText(value);if(p.activeText)p.onEditText(value);}} setScale={value=>{setDraftScale(value);if(p.activeText)p.onScaleText(value);}}/><p className="text-[10px] text-slate-500">5×7 pixel font · each font pixel scales from 1× to 4×</p><button type="button" disabled={!p.textOrigin||!text.trim()} onClick={()=>p.onApplyText(text,textScale)} className="w-full rounded-md bg-cyan-500/15 px-3 py-2 font-semibold text-cyan-200 disabled:opacity-40">Place Text</button></div>;
+  if (p.tool === "filter") return null;
+  if (p.tool === "gradient") return <ToolCard title="Gradient Tool"><p>Drag to blend the active Fill and Border colors along a line.</p></ToolCard>;
+  if (p.tool === "crop") return <div className="space-y-2 rounded-lg border border-slate-700 bg-[#0c121b] p-3 text-xs"><Title>Crop Tool</Title><p className="text-slate-400">Drag to define a crop area. Pixels outside it are removed; the artboard dimensions stay the same.</p>{p.selection&&<><p className="font-mono text-slate-500">{p.selection.width} × {p.selection.height} px</p><button type="button" onClick={p.onApplyCrop} className="w-full rounded-md bg-cyan-500/15 px-3 py-2 font-semibold text-cyan-200">Crop Selection</button></>}</div>;
+  if (p.tool === "perspective") return <div className="space-y-2 rounded-lg border border-slate-700 bg-[#0c121b] p-3 text-xs"><Title>Perspective Tool</Title><p className="text-slate-400">Skew rows progressively across the artboard.</p><label className="block text-slate-400">Horizontal skew: {perspective}px<input className="mt-2 w-full accent-cyan-400" type="range" min="-24" max="24" value={perspective} onChange={e=>setPerspective(Number(e.target.value))} aria-label="Perspective skew"/></label><button type="button" onClick={()=>p.onApplyPerspective(perspective)} className="w-full rounded-md bg-cyan-500/15 px-3 py-2 font-semibold text-cyan-200">Apply Perspective</button></div>;
+  if (p.tool === "fill") return <ToolCard title="Fill Tool"><p>Click a region to fill its connected pixels with the active color.</p></ToolCard>;
+  if (p.tool === "eraser") return <ToolCard title="Eraser"><p>Drag over pixels to remove them from the artboard.</p></ToolCard>;
+  return <ToolCard title="Pencil"><p>Draw pixel by pixel with the active color.</p></ToolCard>;
+}
+
+
+

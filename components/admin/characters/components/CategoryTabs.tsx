@@ -2,7 +2,7 @@
 type Props = { value: string; onChange: (value: string) => void };
 const tabs = [
   ["all", "All"], ["face", "Face"], ["body", "Body"],
-  ["clothing", "Clothings"], ["facial-hair", "Facial Hair"], ["hair", "Hair"]
+  ["clothing", "Clothing"], ["facial-hair", "Facial Hair"], ["hair", "Hair"]
 ];
 export default function CategoryTabs({ value, onChange }: Props) {
   return <div className="flex flex-wrap gap-2">

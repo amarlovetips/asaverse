@@ -1,4 +1,5 @@
 "use client";
+import type { ReactNode } from "react";
 import CharacterComposite from "@/components/CharacterComposite";
 import { DEFAULT_LOOK } from "@/lib/game-types";
 import { getIdlePartSlot } from "../idle-animation/parts";
@@ -15,6 +16,7 @@ export default function WalkAnimationPreview(p: {
   onSelect: (frame: number) => void; onAdd: () => void; onDelete: () => void;
   onPrevious: () => void; onNext: () => void; onPlay: () => void; onStop: () => void;
   onRestart: () => void; onSave: () => void;
+  children?: ReactNode;
 }) {
   const source = p.items.map(item => ({ ...item, ...(item.id === p.target.id ? p.target : {}), source: "supabase" as const }));
   const designs = p.side === "back" ? source.map(item => {
@@ -53,5 +55,6 @@ export default function WalkAnimationPreview(p: {
     <button type="button" onClick={p.onSave} disabled={p.busy || !p.directions.length}
       className="w-full rounded-lg bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950 disabled:opacity-40">{p.busy ? "Saving…" : "Save walking animation"}</button>
     {p.message && <p role="status" className="break-words text-center text-[10px] text-slate-300">{p.message}</p>}
+    {p.children}
   </aside>;
 }
