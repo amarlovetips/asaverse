@@ -93,52 +93,35 @@ export type MapSummary = {
   placements_count?: number;
 };
 
-const LOCAL_STORAGE_KEY_PREFIX = "asaverse_map_";
-const LOCAL_STORAGE_LIST_KEY = "asaverse_maps_list";
-const LOCAL_STORAGE_VERSIONS_PREFIX = "asaverse_map_versions_";
 const MAX_SAVED_VERSIONS = 10;
+
+function createUuid(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = char === "x" ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
 
 /**
  * Saves a snapshot version to the map's version history (retaining at most 10 recent snapshots).
  */
 export async function pushMapVersion(mapData: SavedMapData): Promise<void> {
-  const versionId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `ver_${Date.now()}`;
+  const versionId = createUuid();
   const now = new Date().toISOString();
 
-  // Local storage version history
-  try {
-    const rawVersions = localStorage.getItem(LOCAL_STORAGE_VERSIONS_PREFIX + mapData.id);
-    const versions: MapVersionRecord[] = rawVersions ? JSON.parse(rawVersions) : [];
-    const nextVerNum = (versions[0]?.version_number || 0) + 1;
-    const newEntry: MapVersionRecord = {
-      id: versionId,
-      map_id: mapData.id,
-      version_number: nextVerNum,
-      name: mapData.name,
-      map_data: JSON.parse(JSON.stringify(mapData)),
-      created_at: now,
-    };
-    const nextVersions = [newEntry, ...versions].slice(0, MAX_SAVED_VERSIONS);
-    localStorage.setItem(LOCAL_STORAGE_VERSIONS_PREFIX + mapData.id, JSON.stringify(nextVersions));
-  } catch (err) {
-    console.warn("Local version history save error:", err);
-  }
-
-  // Supabase version history
-  try {
-    const db = createClient();
-    const { data: { user } } = await db.auth.getUser();
-
-    // Query count of versions
-    const { data: remoteVersions } = await db
+  const db = createClient();
+  const { data: { user }, error: authError } = await db.auth.getUser();
+  if (authError) throw authError;
+  const { data: remoteVersions, error: versionsError } = await db
       .from("map_version_history")
       .select("id, version_number")
       .eq("map_id", mapData.id)
       .order("created_at", { ascending: false });
-
-    const currentMax = remoteVersions && remoteVersions.length > 0 ? remoteVersions[0].version_number : 0;
-
-    await db.from("map_version_history").insert({
+  if (versionsError) throw versionsError;
+  const currentMax = remoteVersions?.[0]?.version_number || 0;
+  const { error: insertError } = await db.from("map_version_history").insert({
       id: versionId,
       map_id: mapData.id,
       user_id: user?.id || null,
@@ -147,16 +130,13 @@ export async function pushMapVersion(mapData: SavedMapData): Promise<void> {
       map_data: mapData,
       created_at: now,
     });
-
-    // Prune remote versions beyond 10
-    if (remoteVersions && remoteVersions.length >= MAX_SAVED_VERSIONS) {
-      const toDelete = remoteVersions.slice(MAX_SAVED_VERSIONS - 1).map((v: { id: string }) => v.id);
-      if (toDelete.length > 0) {
-        await db.from("map_version_history").delete().in("id", toDelete);
-      }
+  if (insertError) throw insertError;
+  if (remoteVersions && remoteVersions.length >= MAX_SAVED_VERSIONS) {
+    const toDelete = remoteVersions.slice(MAX_SAVED_VERSIONS - 1).map((v: { id: string }) => v.id);
+    if (toDelete.length > 0) {
+      const { error: deleteError } = await db.from("map_version_history").delete().in("id", toDelete);
+      if (deleteError) throw deleteError;
     }
-  } catch (err) {
-    console.warn("Supabase version history save error:", err);
   }
 }
 
@@ -164,31 +144,16 @@ export async function pushMapVersion(mapData: SavedMapData): Promise<void> {
  * Fetches the version history for a map.
  */
 export async function getMapVersionHistory(mapId: string): Promise<MapVersionRecord[]> {
-  const localVersions: MapVersionRecord[] = [];
-  try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_VERSIONS_PREFIX + mapId);
-    if (raw) localVersions.push(...JSON.parse(raw));
-  } catch (err) {
-    console.warn("Error reading local map versions:", err);
-  }
-
-  try {
-    const db = createClient();
-    const { data, error } = await db
+  const db = createClient();
+  const { data, error } = await db
       .from("map_version_history")
       .select("id, map_id, version_number, name, map_data, created_at")
       .eq("map_id", mapId)
       .order("created_at", { ascending: false })
       .limit(MAX_SAVED_VERSIONS);
 
-    if (!error && Array.isArray(data) && data.length > 0) {
-      return data as MapVersionRecord[];
-    }
-  } catch (err) {
-    console.warn("Supabase version history query error:", err);
-  }
-
-  return localVersions.slice(0, MAX_SAVED_VERSIONS);
+  if (error) throw error;
+  return (data || []) as MapVersionRecord[];
 }
 
 /**
@@ -203,94 +168,40 @@ export async function saveMap(
   mapData.updated_at = now;
   if (!mapData.created_at) mapData.created_at = now;
 
-  // Always persist locally first so work is never lost
-  try {
-    localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + mapData.id, JSON.stringify(mapData));
-    const rawList = localStorage.getItem(LOCAL_STORAGE_LIST_KEY);
-    const list: MapSummary[] = rawList ? JSON.parse(rawList) : [];
-    const idx = list.findIndex((m) => m.id === mapData.id);
-    const summary: MapSummary = {
-      id: mapData.id,
-      name: mapData.name,
-      is_published: mapData.is_published ?? false,
-      is_default: mapData.is_default ?? false,
-      updated_at: mapData.updated_at,
-      created_at: mapData.created_at,
-      placements_count: mapData.placements?.length || 0,
-    };
-    if (idx >= 0) list[idx] = summary;
-    else list.unshift(summary);
-    localStorage.setItem(LOCAL_STORAGE_LIST_KEY, JSON.stringify(list));
-  } catch (err) {
-    console.warn("localStorage save error:", err);
-  }
+  const db = createClient();
+  const { data: { user }, error: authError } = await db.auth.getUser();
+  if (authError) throw authError;
 
-  // Save history version
-  if (createHistoryEntry) {
-    void pushMapVersion(mapData);
-  }
-
-  // Try saving to Supabase
-  try {
-    const db = createClient();
-    const { data: { user } } = await db.auth.getUser();
-
-    // 1. Try public.saved_maps table
-    const { data: savedRecord, error: savedError } = await db
+  const { data: savedRecord, error: savedError } = await db
       .from("saved_maps")
-      .upsert({
-        id: mapData.id,
-        user_id: user?.id || null,
-        name: mapData.name,
-        map_data: mapData,
-        is_published: mapData.is_published ?? false,
-        is_default: mapData.is_default ?? false,
-        updated_at: now,
-      })
+      .upsert(
+        {
+          id: mapData.id,
+          user_id: user?.id || null,
+          name: mapData.name,
+          map_data: mapData,
+          is_published: mapData.is_published ?? false,
+          is_default: mapData.is_default ?? false,
+          updated_at: now,
+        },
+        { onConflict: "id" }
+      )
       .select("id")
       .maybeSingle();
 
-    if (!savedError && savedRecord?.id) {
-      return { id: savedRecord.id, success: true, message: `Map "${mapData.name}" saved to database.` };
-    }
-
-    // 2. Fallback to map_tiles with category = 'map' if saved_maps does not exist
-    if (user?.id) {
-      const { data: tileMap, error: tileError } = await db
-        .from("map_tiles")
-        .upsert({
-          id: mapData.id,
-          user_id: user.id,
-          name: mapData.name,
-          category: "map",
-          canvas_width: 1024,
-          canvas_height: 1024,
-          pixel_data: mapData,
-          is_published: mapData.is_published ?? false,
-          updated_at: now,
-        })
-        .select("id")
-        .maybeSingle();
-
-      if (!tileError && tileMap?.id) {
-        return { id: tileMap.id, success: true, message: `Map "${mapData.name}" saved to database.` };
-      }
-    }
-  } catch (dbErr) {
-    console.warn("Supabase database save error:", dbErr);
+  if (savedError || !savedRecord?.id) {
+    throw new Error(`Map save failed: ${savedError?.message || "database did not return the saved record"}`);
   }
-
-  return {
-    id: mapData.id,
-    success: true,
-    message: `Map "${mapData.name}" saved locally. (Database sync ready)`,
-  };
+  if (createHistoryEntry) await pushMapVersion(mapData);
+  return { id: savedRecord.id, success: true, message: `Map "${mapData.name}" saved to database.` };
 }
 
 /**
- * Loads a map by ID from Supabase or localStorage.
+ * Loads a map by ID from Supabase.
+ * Throws an error if the map is not found, so callers can surface the failure
+ * instead of silently falling back to localStorage.
  */
-export async function loadMap(mapId: string): Promise<SavedMapData | null> {
+export async function loadMap(mapId: string): Promise<SavedMapData> {
   // Try Supabase first
   try {
     const db = createClient();
@@ -311,35 +222,17 @@ export async function loadMap(mapId: string): Promise<SavedMapData | null> {
       return parsed;
     }
 
-    // Check map_tiles
-    const { data: tileData, error: tileError } = await db
-      .from("map_tiles")
-      .select("id, name, pixel_data, is_published, updated_at")
-      .eq("id", mapId)
-      .maybeSingle();
-
-    if (!tileError && tileData?.pixel_data) {
-      const parsed = tileData.pixel_data as SavedMapData;
-      if (parsed.layers && parsed.placements) {
-        parsed.id = tileData.id;
-        parsed.name = tileData.name || parsed.name;
-        parsed.is_published = tileData.is_published ?? parsed.is_published ?? false;
-        return parsed;
-      }
+    if (remoteError) throw remoteError;
+  } catch (err) {
+    // Re-throw Supabase errors so they reach the UI.
+    if (err instanceof Error && err.message.startsWith("failed to load map")) {
+      throw err;
     }
-  } catch (err) {
-    console.warn("Supabase load error:", err);
+    throw err;
   }
 
-  // Fallback to localStorage
-  try {
-    const local = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + mapId);
-    if (local) return JSON.parse(local) as SavedMapData;
-  } catch (err) {
-    console.warn("localStorage load error:", err);
-  }
-
-  return null;
+  // Map was not found in any database table.
+  throw new Error(`Map with id "${mapId}" was not found in the database. It has not been saved yet.`);
 }
 
 /**
@@ -348,20 +241,7 @@ export async function loadMap(mapId: string): Promise<SavedMapData | null> {
 export async function listMaps(): Promise<MapSummary[]> {
   const mapDict = new Map<string, MapSummary>();
 
-  // 1. From localStorage
-  try {
-    const rawList = localStorage.getItem(LOCAL_STORAGE_LIST_KEY);
-    if (rawList) {
-      const localList: MapSummary[] = JSON.parse(rawList);
-      for (const item of localList) {
-        mapDict.set(item.id, item);
-      }
-    }
-  } catch (err) {
-    console.warn("Error reading local maps list:", err);
-  }
-
-  // 2. From Supabase saved_maps
+  // From Supabase saved_maps
   try {
     const db = createClient();
     const { data, error } = await db
@@ -369,7 +249,12 @@ export async function listMaps(): Promise<MapSummary[]> {
       .select("id, name, is_published, is_default, updated_at, created_at, map_data")
       .order("updated_at", { ascending: false });
 
-    if (!error && Array.isArray(data)) {
+    if (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`failed to list maps from saved_maps: ${message}`);
+    }
+
+    if (Array.isArray(data)) {
       for (const item of data) {
         const placementsCount = Array.isArray(item.map_data?.placements)
           ? item.map_data.placements.length
@@ -386,34 +271,11 @@ export async function listMaps(): Promise<MapSummary[]> {
       }
     }
   } catch (err) {
-    console.warn("Error fetching remote saved_maps list:", err);
-  }
-
-  // 3. From Supabase map_tiles category 'map'
-  try {
-    const db = createClient();
-    const { data, error } = await db
-      .from("map_tiles")
-      .select("id, name, is_published, updated_at, created_at")
-      .eq("category", "map")
-      .order("updated_at", { ascending: false });
-
-    if (!error && Array.isArray(data)) {
-      for (const item of data) {
-        if (!mapDict.has(item.id)) {
-          mapDict.set(item.id, {
-            id: item.id,
-            name: item.name || "Untitled Map",
-            is_published: item.is_published === true,
-            is_default: false,
-            updated_at: item.updated_at,
-            created_at: item.created_at,
-          });
-        }
-      }
+    // Re-throw Supabase errors so the UI can surface them.
+    if (err instanceof Error && err.message.startsWith("failed to list maps")) {
+      throw err;
     }
-  } catch (err) {
-    console.warn("Error fetching remote map_tiles list:", err);
+    throw err;
   }
 
   return Array.from(mapDict.values()).sort(
@@ -426,39 +288,8 @@ export async function listMaps(): Promise<MapSummary[]> {
  */
 export async function updateMapPublishStatus(mapId: string, isPublished: boolean): Promise<boolean> {
   const timestamp = new Date().toISOString();
-
-  // Local storage update
-  try {
-    const rawMap = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + mapId);
-    if (rawMap) {
-      const map: SavedMapData = JSON.parse(rawMap);
-      map.is_published = isPublished;
-      map.updated_at = timestamp;
-      localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + mapId, JSON.stringify(map));
-    }
-    const rawList = localStorage.getItem(LOCAL_STORAGE_LIST_KEY);
-    if (rawList) {
-      const list: MapSummary[] = JSON.parse(rawList);
-      const target = list.find((m) => m.id === mapId);
-      if (target) {
-        target.is_published = isPublished;
-        target.updated_at = timestamp;
-        localStorage.setItem(LOCAL_STORAGE_LIST_KEY, JSON.stringify(list));
-      }
-    }
-  } catch (err) {
-    console.warn("Error updating local map publication status:", err);
-  }
-
-  // Remote Supabase update
-  try {
-    const db = createClient();
-    await db.from("saved_maps").update({ is_published: isPublished, updated_at: timestamp }).eq("id", mapId);
-    await db.from("map_tiles").update({ is_published: isPublished, updated_at: timestamp }).eq("id", mapId);
-  } catch (err) {
-    console.warn("Supabase map publication update warning:", err);
-  }
-
+  const { error } = await createClient().from("saved_maps").update({ is_published: isPublished, updated_at: timestamp }).eq("id", mapId);
+  if (error) throw error;
   return true;
 }
 
@@ -467,41 +298,11 @@ export async function updateMapPublishStatus(mapId: string, isPublished: boolean
  */
 export async function setDefaultMap(mapId: string): Promise<boolean> {
   const timestamp = new Date().toISOString();
-
-  // Local storage update
-  try {
-    const rawList = localStorage.getItem(LOCAL_STORAGE_LIST_KEY);
-    if (rawList) {
-      const list: MapSummary[] = JSON.parse(rawList);
-      for (const m of list) {
-        m.is_default = m.id === mapId;
-      }
-      localStorage.setItem(LOCAL_STORAGE_LIST_KEY, JSON.stringify(list));
-    }
-    const rawMap = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + mapId);
-    if (rawMap) {
-      const map: SavedMapData = JSON.parse(rawMap);
-      map.is_default = true;
-      map.is_published = true; // default maps are published
-      map.updated_at = timestamp;
-      localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + mapId, JSON.stringify(map));
-    }
-    localStorage.setItem("asaverse_default_map_id", mapId);
-  } catch (err) {
-    console.warn("Error setting default map locally:", err);
-  }
-
-  // Remote Supabase update
-  try {
-    const db = createClient();
-    // Clear other default maps
-    await db.from("saved_maps").update({ is_default: false }).neq("id", mapId);
-    // Set this map as default (and ensure published)
-    await db.from("saved_maps").update({ is_default: true, is_published: true, updated_at: timestamp }).eq("id", mapId);
-  } catch (err) {
-    console.warn("Supabase set default map warning:", err);
-  }
-
+  const db = createClient();
+  const { error: clearError } = await db.from("saved_maps").update({ is_default: false }).neq("id", mapId);
+  if (clearError) throw clearError;
+  const { error } = await db.from("saved_maps").update({ is_default: true, is_published: true, updated_at: timestamp }).eq("id", mapId);
+  if (error) throw error;
   return true;
 }
 
@@ -518,7 +319,8 @@ export async function getDefaultMap(): Promise<SavedMapData | null> {
       .eq("is_default", true)
       .maybeSingle();
 
-    if (!error && data?.map_data) {
+    if (error) throw error;
+    if (data?.map_data) {
       const parsed = data.map_data as SavedMapData;
       parsed.id = data.id;
       parsed.is_default = true;
@@ -526,29 +328,8 @@ export async function getDefaultMap(): Promise<SavedMapData | null> {
       return parsed;
     }
   } catch (err) {
-    console.warn("Supabase getDefaultMap error:", err);
+    throw err instanceof Error ? err : new Error(String(err));
   }
-
-  // Check localStorage
-  try {
-    const defaultId = localStorage.getItem("asaverse_default_map_id");
-    if (defaultId) {
-      const map = await loadMap(defaultId);
-      if (map) return map;
-    }
-
-    const rawList = localStorage.getItem(LOCAL_STORAGE_LIST_KEY);
-    if (rawList) {
-      const list: MapSummary[] = JSON.parse(rawList);
-      const defaultItem = list.find((m) => m.is_default);
-      if (defaultItem) {
-        return await loadMap(defaultItem.id);
-      }
-    }
-  } catch (err) {
-    console.warn("Local getDefaultMap error:", err);
-  }
-
   return null;
 }
 
@@ -563,30 +344,11 @@ export async function deleteMap(mapId: string): Promise<boolean> {
     throw new Error("Cannot delete a published map. Unpublish it first.");
   }
 
-  // Remove from localStorage
-  try {
-    localStorage.removeItem(LOCAL_STORAGE_KEY_PREFIX + mapId);
-    localStorage.removeItem(LOCAL_STORAGE_VERSIONS_PREFIX + mapId);
-    const rawList = localStorage.getItem(LOCAL_STORAGE_LIST_KEY);
-    if (rawList) {
-      const list: MapSummary[] = JSON.parse(rawList);
-      const filtered = list.filter((m) => m.id !== mapId);
-      localStorage.setItem(LOCAL_STORAGE_LIST_KEY, JSON.stringify(filtered));
-    }
-  } catch (err) {
-    console.warn("Local map delete error:", err);
-  }
-
-  // Remove from Supabase
-  try {
-    const db = createClient();
-    await db.from("map_version_history").delete().eq("map_id", mapId);
-    await db.from("saved_maps").delete().eq("id", mapId);
-    await db.from("map_tiles").delete().eq("id", mapId);
-  } catch (err) {
-    console.warn("Supabase map delete error:", err);
-  }
-
+  const db = createClient();
+  const { error: versionError } = await db.from("map_version_history").delete().eq("map_id", mapId);
+  if (versionError) throw versionError;
+  const { error } = await db.from("saved_maps").delete().eq("id", mapId);
+  if (error) throw error;
   return true;
 }
 

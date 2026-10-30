@@ -17,6 +17,7 @@ import { readDesignTextLayers, type PixelTextLayer } from "../../../../lib/chara
 
 export const ARTBOARDS = ["body", "face", "facial-hair", "hair", "body-back", "face-back", "facial-hair-back", "hair-back", "clothing", "outfit", "clothing-back", "outfit-back", "back-side"];
 type Pixels = Record<string,string>;
+const DEFAULT_PALETTE = ["#171923", "#ffffff", "#f2c49b", "#754631", "#392447", "#d65b82", "#19b9ad", "#4168d9", "#b8476a", "#d69a38", "#794bd0", "#e6e6ee", "#38d9ee", "#4ae08e", "#000000", "#888888"];
 export type { SelectionBounds, SelectionKind } from "./SelectionBounds";
 
 function textBounds(layer:PixelTextLayer):SelectionBounds{return {x:layer.x,y:layer.y,width:Math.max(1,(layer.text.length*6-1)*layer.scale),height:7*layer.scale};}
@@ -58,6 +59,7 @@ export function usePixelEditorState(options?: PixelEditorOptions) {
  const [guide,setGuide]=useState(true);
  const [xy,setXy]=useState("0, 0");
  const [recent,setRecent]=useState<string[]>([]);
+ const [palette,setPalette]=useState<string[]>(DEFAULT_PALETTE);
  const [selection,setSelection]=useState<SelectionBounds|null>(null);
  const [selectionKind,setSelectionKind]=useState<SelectionKind>("region");
  const [selectedPixelKeys,setSelectedPixelKeys]=useState<string[]>([]);
@@ -132,25 +134,107 @@ export function usePixelEditorState(options?: PixelEditorOptions) {
  function changeArtboardSize(width:number,nextHeight:number):boolean{
   if(!validArtboardDimensions(width,nextHeight))return false;
   if(width===size&&nextHeight===height)return true;
-  if((Object.keys(draw.pixels).length||textLayers.length)&&!globalThis.confirm("Changing artboard size clears the current artwork. Continue?"))return false;
-  boards.current[part]={};histories.current[part]=[];textBoards.current[part]=[];setTextLayers([]);setActiveTextId(null);
-  setBoardPixels(old=>({...old,[part]:{}}));setSizeState(width);setHeight(nextHeight);setActiveDesignId(null);
-  draw.setPixels({});draw.setHistory([]);draw.setFuture([]);setSelection(null);setSelectedPixelKeys([]);setSelectionKind("region");return true;
+  // Calculate occupied pixel bounds across current artwork
+  let minOccupiedX = Infinity;
+  let maxOccupiedX = -1;
+  let minOccupiedY = Infinity;
+  let maxOccupiedY = -1;
+  for(const [key, color] of Object.entries(draw.pixels)){
+    if(!color) continue;
+    const [px, py] = key.split(",").map(Number);
+    if(Number.isFinite(px)){
+      if(px < minOccupiedX) minOccupiedX = px;
+      if(px > maxOccupiedX) maxOccupiedX = px;
+    }
+    if(Number.isFinite(py)){
+      if(py < minOccupiedY) minOccupiedY = py;
+      if(py > maxOccupiedY) maxOccupiedY = py;
+    }
+  }
+  for(const layer of textLayers){
+    const b = textBounds(layer);
+    if(b.x < minOccupiedX) minOccupiedX = b.x;
+    if(b.x + b.width - 1 > maxOccupiedX) maxOccupiedX = b.x + b.width - 1;
+    if(b.y < minOccupiedY) minOccupiedY = b.y;
+    if(b.y + b.height - 1 > maxOccupiedY) maxOccupiedY = b.y + b.height - 1;
+  }
+  const occupiedWidth = maxOccupiedX >= 0 ? maxOccupiedX - minOccupiedX + 1 : 1;
+  const occupiedHeight = maxOccupiedY >= 0 ? maxOccupiedY - minOccupiedY + 1 : 1;
+  if(width < occupiedWidth || nextHeight < occupiedHeight){
+    return false;
+  }
+
+  // Calculate symmetric centering offsets (distributing added or reduced space equally across opposite sides)
+  const offsetX = Math.floor((width - size) / 2);
+  const offsetY = Math.floor((nextHeight - height) / 2);
+
+  // If shrinking with centering would push occupied pixels out-of-bounds, adjust or reject
+  if(maxOccupiedX >= 0){
+    if(minOccupiedX + offsetX < 0 || maxOccupiedX + offsetX >= width ||
+       minOccupiedY + offsetY < 0 || maxOccupiedY + offsetY >= nextHeight){
+      return false;
+    }
+  }
+
+  // Shift existing pixels by calculated centering offset
+  const preservedPixels: Pixels = {};
+  for(const [key, color] of Object.entries(draw.pixels)){
+    if(!color) continue;
+    const [px, py] = key.split(",").map(Number);
+    const nx = px + offsetX;
+    const ny = py + offsetY;
+    if(nx >= 0 && nx < width && ny >= 0 && ny < nextHeight){
+      preservedPixels[`${nx},${ny}`] = color;
+    }
+  }
+
+  // Shift text layers by the centering offset
+  const centeredTextLayers = textLayers.map(l => fitTextLayer({...l, x: l.x + offsetX, y: l.y + offsetY}, width, nextHeight));
+
+  boards.current[part] = preservedPixels;
+  setBoardPixels(old => ({...old, [part]: preservedPixels}));
+  textBoards.current[part] = centeredTextLayers;
+  setTextLayers(centeredTextLayers);
+  setSizeState(width);
+  setHeight(nextHeight);
+  draw.setPixels(preservedPixels);
+  draw.setFuture([]);
+  setSelection(null);
+  setSelectedPixelKeys([]);
+  setSelectionKind("region");
+  return true;
  }
  function changeSize(v:number){return changeArtboardSize(v,v);}
  function setPixels(p:Pixels){writePixels(p);}
- function loadDesign(d:{id:string;design_name:string;design_type:string;canvas_width:number;canvas_height?:number;pixel_data:unknown},requestedSide?:"front"|"back"){
+ function loadDesign(d:{id:string;design_name:string;design_type:string;canvas_width:number;canvas_height?:number;pixel_data:unknown;palette?:string[]},requestedSide?:"front"|"back"){
   const designHeight=d.canvas_height||d.canvas_width;
   const typeAllowed=options?.categories?true:ARTBOARDS.includes(d.design_type);
   if(!typeAllowed||!validArtboardDimensions(d.canvas_width,designHeight))return;
   const baseType=d.design_type.replace(/-back$/,""),targetSide=requestedSide||(d.design_type.endsWith("-back")?"back":"front");
-  const target=targetSide==="back"?`${baseType}-back`:baseType,pixels=readArtboardSide(d.pixel_data,targetSide,d.canvas_width,designHeight);
+  const target=targetSide==="back"?`${baseType}-back`:baseType;
+  const raw=d.pixel_data||{};
+  const stored = raw && typeof raw === "object" && !Array.isArray(raw) && "pixels" in raw
+    ? raw as { pixels?: unknown; text_layers?: PixelTextLayer[] }
+    : null;
+  let pixels:Record<string,string>;
+  if (stored) {
+    const source = stored.pixels && typeof stored.pixels === "object" && !Array.isArray(stored.pixels)
+      ? stored.pixels as Record<string, string>
+      : {};
+    pixels = Object.fromEntries(Object.entries(source).filter(([key]) => {
+      const [x, y] = key.split(",").map(Number);
+      return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < d.canvas_width && y < designHeight;
+    }));
+  } else {
+    pixels = readArtboardSide(raw, targetSide, d.canvas_width, designHeight);
+  }
   boards.current[part]=draw.pixels;histories.current[part]=draw.history;
   boards.current[target]=pixels;histories.current[target]=[];
-  const layers=readDesignTextLayers(d.pixel_data,targetSide);textBoards.current[target]=layers;
+  const layers=stored?.text_layers || readDesignTextLayers(d.pixel_data,targetSide);textBoards.current[target]=layers;
   designJson.current=d.pixel_data;
   setBoardPixels(old=>({...old,[part]:draw.pixels,[target]:pixels}));setTextLayers(layers);setActiveTextId(null);setReferencePixels(targetSide==="back"?composeText(readArtboardSide(d.pixel_data,"front",d.canvas_width,designHeight),readDesignTextLayers(d.pixel_data,"front"),d.canvas_width,designHeight):{});setName(d.design_name);setActiveDesignId(d.id);
   setPartState(target);setSideState(targetSide);setSizeState(d.canvas_width);setHeight(designHeight);draw.setPixels(pixels);draw.setHistory([]);draw.setFuture([]);setSelection(null);setSelectionKind("region");setSelectedPixelKeys([]);setPolygonPoints([]);
+  if (d.palette?.length) setPalette(d.palette);
  }
  function locate(e:React.PointerEvent<HTMLDivElement>){const r=e.currentTarget.getBoundingClientRect();const x=Math.max(0,Math.min(size-1,Math.floor((e.clientX-r.left)/r.width*size)));const y=Math.max(0,Math.min(height-1,Math.floor((e.clientY-r.top)/r.height*height)));setXy(`${x}, ${y}`);return {x,y};}
  function previewShape(start:PixelPoint,end:PixelPoint,constrain=false){
@@ -264,8 +348,5 @@ export function usePixelEditorState(options?: PixelEditorOptions) {
  function deleteSelection(){if(!selection)return;if(activeTextId){const next=textLayers.filter(layer=>layer.id!==activeTextId);setTextLayers(next);textBoards.current[part]=next;setActiveTextId(null);setSelection(null);return;}const keys=selectionPixelKeys(draw.pixels,selection,selectionKind==="magic"?selectedPixelKeys:undefined);if(!keys.length)return;remember();const next={...draw.pixels};for(const key of keys)delete next[key];writePixels(next);}
  function undo(){const prior=draw.history.at(-1);if(!prior)return;draw.undo();const h=draw.history.slice(0,-1);histories.current[part]=h;boards.current[part]=prior;setBoardPixels(old=>({...old,[part]:prior}));}
  function redo(){const next=draw.future.at(-1);if(!next)return;draw.redo();boards.current[part]=next;setBoardPixels(old=>({...old,[part]:next}));}
- return {name,setName,activeDesignId,setActiveDesignId,part,setPart,side,setSide,category:part.endsWith("-back")?part.slice(0,-5):part==="back-side"?"body":part,boardPixels,color,setColor,fillColor,setFillColor,shapeFillColor,setShapeFillColor,borderColor,setBorderColor,shapeFilled,setShapeFilled,strokeWidth,setStrokeWidth,size,height,setSize:changeSize,setArtboardSize:changeArtboardSize,tool,setTool,zoom,setZoom,guide,setGuide,xy,recent,setRecent,...draw,pixels:renderedPixels,basePixels:draw.pixels,textLayers,activeText: textLayers.find(layer=>layer.id===activeTextId)||null,activeTextId,editSelectedText,scaleSelectedText,referencePixels,setPixels,loadDesign,undo,redo,setHistory:draw.setHistory,start,move,stop,selection,selectionKind,selectedPixelKeys,selectedPixelCount:selection?(selectionKind==="magic"?selectedPixelKeys.length:keysInBounds(draw.pixels,selection).length):0,clearSelection:()=>{setSelection(null);setActiveTextId(null);setSelectedPixelKeys([]);setSelectionKind("region");},selectAll,invertSelection,copySelectionPixels,pasteSelectionPixels,transformSelectionPixels,moveSelectionBy,deleteSelection,applySelectionFill,recolorSelection,selectionMoving,polygonPoints,finishPolygon,textOrigin,applyText,applyFilter,applyCrop,applyPerspective};
+ return {name,setName,activeDesignId,setActiveDesignId,part,setPart,side,setSide,category:part.endsWith("-back")?part.slice(0,-5):part==="back-side"?"body":part,boardPixels,color,setColor,fillColor,setFillColor,shapeFillColor,setShapeFillColor,borderColor,setBorderColor,shapeFilled,setShapeFilled,strokeWidth,setStrokeWidth,size,height,setSize:changeSize,setArtboardSize:changeArtboardSize,tool,setTool,zoom,setZoom,guide,setGuide,xy,recent,setRecent,palette,setPalette,...draw,pixels:renderedPixels,basePixels:draw.pixels,textLayers,activeText: textLayers.find(layer=>layer.id===activeTextId)||null,activeTextId,editSelectedText,scaleSelectedText,referencePixels,setPixels,loadDesign,undo,redo,setHistory:draw.setHistory,start,move,stop,selection,selectionKind,selectedPixelKeys,selectedPixelCount:selection?(selectionKind==="magic"?selectedPixelKeys.length:keysInBounds(draw.pixels,selection).length):0,clearSelection:()=>{setSelection(null);setActiveTextId(null);setSelectedPixelKeys([]);setSelectionKind("region");},selectAll,invertSelection,copySelectionPixels,pasteSelectionPixels,transformSelectionPixels,moveSelectionBy,deleteSelection,applySelectionFill,recolorSelection,selectionMoving,polygonPoints,finishPolygon,textOrigin,applyText,applyFilter,applyCrop,applyPerspective};
 }
-
-
-

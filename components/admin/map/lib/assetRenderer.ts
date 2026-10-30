@@ -4,19 +4,68 @@ const dataUrlCache = new Map<string, string>();
 const canvasCache = new Map<string, HTMLCanvasElement>();
 
 /**
- * Creates an offscreen canvas containing the pixel-accurate rendered asset.
+ * Computes tight bounding box of non-transparent artwork pixels, excluding empty outer margins.
+ */
+export function getOccupiedAssetBounds(asset: AssetRecord): {
+  minX: number;
+  minY: number;
+  width: number;
+  height: number;
+  hasPixels: boolean;
+} {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  const pixels = asset.pixel_data || {};
+  let count = 0;
+  for (const [coord, color] of Object.entries(pixels)) {
+    if (!color) continue;
+    const [x, y] = coord.split(",").map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    count++;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  if (count === 0) {
+    return {
+      minX: 0,
+      minY: 0,
+      width: Math.max(1, asset.canvas_width),
+      height: Math.max(1, asset.canvas_height),
+      hasPixels: false,
+    };
+  }
+
+  return {
+    minX,
+    minY,
+    width: Math.max(1, maxX - minX + 1),
+    height: Math.max(1, maxY - minY + 1),
+    hasPixels: true,
+  };
+}
+
+/**
+ * Creates an offscreen canvas containing the pixel-accurate rendered asset,
+ * trimmed of all fully transparent outer margins while preserving all pixels.
  */
 export function getOrCreateAssetCanvas(asset: AssetRecord): HTMLCanvasElement | null {
   if (typeof window === "undefined") return null;
 
-  const cacheKey = `${asset.id}_${asset.updated_at}_${asset.canvas_width}x${asset.canvas_height}`;
+  const bounds = getOccupiedAssetBounds(asset);
+  const cacheKey = `${asset.id}_${asset.updated_at}_${bounds.width}x${bounds.height}_offset_${bounds.minX}_${bounds.minY}`;
   if (canvasCache.has(cacheKey)) {
     return canvasCache.get(cacheKey)!;
   }
 
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, asset.canvas_width);
-  canvas.height = Math.max(1, asset.canvas_height);
+  canvas.width = bounds.width;
+  canvas.height = bounds.height;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
 
@@ -28,9 +77,11 @@ export function getOrCreateAssetCanvas(asset: AssetRecord): HTMLCanvasElement | 
     if (!color) continue;
     const [x, y] = coord.split(",").map(Number);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    if (x >= 0 && x < canvas.width && y >= 0 && y < canvas.height) {
+    const rx = x - bounds.minX;
+    const ry = y - bounds.minY;
+    if (rx >= 0 && rx < canvas.width && ry >= 0 && ry < canvas.height) {
       ctx.fillStyle = color;
-      ctx.fillRect(x, y, 1, 1);
+      ctx.fillRect(rx, ry, 1, 1);
     }
   }
 
@@ -39,10 +90,12 @@ export function getOrCreateAssetCanvas(asset: AssetRecord): HTMLCanvasElement | 
 }
 
 /**
- * Returns a data URL for the given asset (for rendering in <img> tags or preview thumbnails).
+ * Returns a data URL for the given asset (for rendering in <img> tags or preview thumbnails),
+ * automatically cropped to the occupied non-transparent pixel artwork.
  */
 export function getAssetDataUrl(asset: AssetRecord): string {
-  const cacheKey = `${asset.id}_${asset.updated_at}_${asset.canvas_width}x${asset.canvas_height}`;
+  const bounds = getOccupiedAssetBounds(asset);
+  const cacheKey = `${asset.id}_${asset.updated_at}_${bounds.width}x${bounds.height}_offset_${bounds.minX}_${bounds.minY}`;
   if (dataUrlCache.has(cacheKey)) {
     return dataUrlCache.get(cacheKey)!;
   }

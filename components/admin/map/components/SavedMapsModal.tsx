@@ -13,6 +13,7 @@ type Props = {
 export default function SavedMapsModal({ isOpen, onClose, onLoadMap, currentMapId }: Props) {
   const [maps, setMaps] = useState<{ id: string; name: string; updated_at: string }[]>([]);
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<{ text: string; type: "success" | "error" | "info" } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -20,9 +21,12 @@ export default function SavedMapsModal({ isOpen, onClose, onLoadMap, currentMapI
     let live = true;
     async function fetchList() {
       setLoading(true);
+      setMessage(null);
       try {
         const items = await listMaps();
         if (live) setMaps(items);
+      } catch (err) {
+        if (live) setMessage({ text: err instanceof Error ? err.message : "Failed to load saved maps", type: "error" });
       } finally {
         if (live) setLoading(false);
       }
@@ -64,11 +68,12 @@ export default function SavedMapsModal({ isOpen, onClose, onLoadMap, currentMapI
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          {loading ? (
-            <div className="flex h-40 items-center justify-center text-xs text-slate-400">
-              Loading saved maps...
+          {(message || loading) && (
+            <div className={`border-b border-slate-800 px-6 py-3 text-xs ${message?.type === "error" ? "text-red-400" : "text-slate-400"}`}>
+              {message?.text || "Loading..."}
             </div>
-          ) : maps.length === 0 ? (
+          )}
+          {!message && !loading && maps.length === 0 ? (
             <div className="flex h-40 flex-col items-center justify-center text-center text-xs text-slate-400">
               <p className="font-semibold text-slate-300">No saved maps found</p>
               <p className="mt-1">Save your current map using the &quot;Save Map&quot; button in the toolbar.</p>

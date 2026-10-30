@@ -1,6 +1,5 @@
 import { createClient } from "../../../../lib/supabase";
 import type { PixelTextLayer } from "../../../../lib/character-design-json";
-import { syncTileObjectJson, type TileObjectRecord } from "../lib/tileObjectStorage";
 
 type Input = {
   name: string;
@@ -15,71 +14,14 @@ type Input = {
 };
 
 /**
- * Computes tight bounding box of non-transparent artwork pixels, excluding unused transparent margins.
- * Artwork occupying e.g. 15x10 on a 16x16 artboard will be trimmed to width 15, height 10,
- * with pixel coordinates normalized to (0, 0).
+ * Artwork is persisted with its complete artboard dimensions and coordinates.
  */
-function computeTrimmedArtwork(
-  pixels: Record<string, string>,
-  origWidth: number,
-  origHeight: number
-): { width: number; height: number; pixels: Record<string, string>; hasVisiblePixels: boolean } {
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-
-  let hasPixel = false;
-  for (const [key, color] of Object.entries(pixels)) {
-    if (!color) continue;
-    const [x, y] = key.split(",").map(Number);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    hasPixel = true;
-    if (x < minX) minX = x;
-    if (x > maxX) maxX = x;
-    if (y < minY) minY = y;
-    if (y > maxY) maxY = y;
-  }
-
-  // If no pixels drawn, report that no visible pixels exist
-  if (!hasPixel) {
-    return { width: origWidth, height: origHeight, pixels: {}, hasVisiblePixels: false };
-  }
-
-  const contentWidth = Math.max(1, maxX - minX + 1);
-  const contentHeight = Math.max(1, maxY - minY + 1);
-
-  // Shift coordinates so content starts at (0, 0)
-  const trimmedPixels: Record<string, string> = {};
-  for (const [key, color] of Object.entries(pixels)) {
-    if (!color) continue;
-    const [x, y] = key.split(",").map(Number);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-    const nx = x - minX;
-    const ny = y - minY;
-    trimmedPixels[`${nx},${ny}`] = color;
-  }
-
-  return {
-    width: contentWidth,
-    height: contentHeight,
-    pixels: trimmedPixels,
-    hasVisiblePixels: true,
-  };
-}
-
 export async function persistCharacterDesign(p: Input) {
   if (!p.name.trim()) throw Error("Enter a tile or object name.");
 
-  // Automatic content bounds detection:
-  // Detect actual non-transparent artwork bounds and exclude unused transparent margins
-  const trimmed = computeTrimmedArtwork(p.pixels, p.width, p.height);
-  if (!trimmed.hasVisiblePixels) {
+  if (!Object.values(p.pixels).some(Boolean)) {
     throw Error("Cannot save an empty or completely transparent design. Please draw at least one pixel.");
   }
-  const effectiveWidth = trimmed.width;
-  const effectiveHeight = trimmed.height;
-  const effectivePixels = trimmed.pixels;
 
   const db = createClient();
   let userId: string | undefined;
@@ -121,17 +63,19 @@ export async function persistCharacterDesign(p: Input) {
           await db.from(altTable).delete().eq("id", p.designId);
         }
       }
-    } catch {
-      // Continue with false fallback
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Surface real errors when we cannot determine the existing publication state.
+      throw new Error(`Failed to preserve publication status for design ${p.designId}: ${message}`);
     }
 
     const payload = {
       ...(userId ? { user_id: userId } : {}),
       name: p.name.trim(),
       category,
-      canvas_width: effectiveWidth,
-      canvas_height: effectiveHeight,
-      pixel_data: { pixels: effectivePixels, base_pixels: p.basePixels, text_layers: p.textLayers },
+      canvas_width: p.width,
+      canvas_height: p.height,
+      pixel_data: { pixels: p.pixels, base_pixels: p.basePixels, text_layers: p.textLayers },
       palette: p.palette,
       is_published: existingPublished,
       updated_at: now,
@@ -151,27 +95,16 @@ export async function persistCharacterDesign(p: Input) {
         savedId = data.id;
         savedToDb = true;
       } else if (error) {
-        console.warn("Supabase upsert warning:", error);
+        const message = error instanceof Error ? error.message : String(error);
+        // Surface real errors instead of silently falling back to local storage.
+        throw new Error(`Failed to update design in the database: ${message}`);
       }
     } catch (dbErr) {
-      console.warn("Supabase upsert error:", dbErr);
+      const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
+      throw new Error(`Failed to update design in the database: ${message}`);
     }
 
     // Always sync to local JSON storage
-    const record: TileObjectRecord = {
-      id: savedId,
-      name: p.name.trim(),
-      category,
-      canvas_width: effectiveWidth,
-      canvas_height: effectiveHeight,
-      pixel_data: effectivePixels,
-      palette: p.palette,
-      is_published: existingPublished,
-      updated_at: now,
-      user_id: userId,
-    };
-    syncTileObjectJson(record);
-
     return {
       id: savedId,
       message: `${category} updated: ${p.name.trim()}${savedToDb ? "" : " (saved to local storage)"}`,
@@ -183,9 +116,9 @@ export async function persistCharacterDesign(p: Input) {
     ...(userId ? { user_id: userId } : {}),
     name: p.name.trim(),
     category,
-    canvas_width: effectiveWidth,
-    canvas_height: effectiveHeight,
-    pixel_data: { pixels: effectivePixels, base_pixels: p.basePixels, text_layers: p.textLayers },
+    canvas_width: p.width,
+    canvas_height: p.height,
+    pixel_data: { pixels: p.pixels, base_pixels: p.basePixels, text_layers: p.textLayers },
     palette: p.palette,
     is_published: false, // Default to unpublished
     updated_at: now,
@@ -200,26 +133,14 @@ export async function persistCharacterDesign(p: Input) {
       newId = data.id;
       savedToDb = true;
     } else if (error) {
-      console.warn("Supabase insert warning:", error);
+      const message = error instanceof Error ? error.message : String(error);
+      // Surface real errors instead of silently falling back to local storage.
+      throw new Error(`Failed to save new design to the database: ${message}`);
     }
   } catch (dbErr) {
-    console.warn("Supabase insert error:", dbErr);
+    const message = dbErr instanceof Error ? dbErr.message : String(dbErr);
+    throw new Error(`Failed to save new design to the database: ${message}`);
   }
-
-  // Always sync to local JSON storage
-  const newRecord: TileObjectRecord = {
-    id: newId,
-    name: p.name.trim(),
-    category,
-    canvas_width: effectiveWidth,
-    canvas_height: effectiveHeight,
-    pixel_data: effectivePixels,
-    palette: p.palette,
-    is_published: false,
-    updated_at: now,
-    user_id: userId,
-  };
-  syncTileObjectJson(newRecord);
 
   return {
     id: newId,

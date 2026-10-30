@@ -1,0 +1,10 @@
+{
+    "chat.mcp.serverSampling": {
+        "asaverse/.mcp.json: Supabase": {
+            "allowedModels": [
+                "copilot/auto",
+                "copilotcli/auto"
+            ]
+        }
+    }
+}

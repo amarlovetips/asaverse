@@ -45,11 +45,18 @@ export default function TileObjectStudio({
             design_type: design.category,
             canvas_width: design.canvas_width,
             canvas_height: design.canvas_height,
-            pixel_data: { pixels: design.pixel_data },
+            pixel_data: {
+              pixels: design.pixel_data,
+              base_pixels: design.base_pixels,
+              text_layers: design.text_layers,
+            },
+            palette: design.palette,
           });
         }
       } catch (err) {
-        console.warn("TileObjectStudio load error:", err);
+        // Surface the real Supabase error so the editor doesn't open with a
+        // blank/preview-less design. The caller (parent workspace) will display it.
+        throw err;
       }
     }
 

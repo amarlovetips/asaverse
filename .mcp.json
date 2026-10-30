@@ -1,0 +1,8 @@
+
+{
+	"Supabase": {
+		"url": "https://mcp.supabase.com/mcp?project_ref=awtljpiyytarbxukezok&features=database,docs,debugging,development",
+		"type": "http"
+	}
+  
+}

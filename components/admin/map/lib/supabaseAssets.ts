@@ -1,5 +1,4 @@
 import { createClient } from "@/lib/supabase";
-import { getLocalJsonTileObjects } from "./tileObjectStorage";
 
 export type RawPixelData = {
   pixels?: Record<string, string>;
@@ -13,6 +12,8 @@ export type AssetRecord = {
   category: string;
   canvas_width: number;
   canvas_height: number;
+  source_width?: number;
+  source_height?: number;
   pixel_data: Record<string, string>;
   palette?: string[];
   updated_at: string;
@@ -34,32 +35,68 @@ export function normalizePixels(raw: unknown): Record<string, string> {
 }
 
 /**
- * Retrieves saved tiles and objects.
- * When `onlyPublished` is true (the default for the Map Generator browser),
- * it returns ONLY designs with is_published === true.
- * Unpublished designs are strictly excluded.
+ * Calculates occupied pixel bounds and returns a trimmed AssetRecord representation
+ * without empty margins, while retaining source dimensions.
  */
-export async function fetchAllMapAssets(onlyPublished: boolean = true): Promise<AssetRecord[]> {
-  const map = new Map<string, AssetRecord>();
+export function computeTrimmedAsset(asset: AssetRecord): AssetRecord {
+  const pixels = asset.pixel_data || {};
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let count = 0;
 
-  // 1. Load from local JSON storage
-  const localList = getLocalJsonTileObjects();
-  for (const item of localList) {
-    if (onlyPublished && !item.is_published) continue;
-    map.set(item.id, {
-      id: item.id,
-      name: item.name,
-      category: item.category,
-      canvas_width: item.canvas_width,
-      canvas_height: item.canvas_height,
-      pixel_data: item.pixel_data,
-      palette: item.palette,
-      updated_at: item.updated_at,
-      is_published: item.is_published,
-    });
+  for (const [coord, color] of Object.entries(pixels)) {
+    if (!color) continue;
+    const [x, y] = coord.split(",").map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    count++;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
   }
 
-  // 2. Fetch from Supabase map_tiles & map_objects
+  if (count === 0) {
+    return {
+      ...asset,
+      source_width: asset.canvas_width,
+      source_height: asset.canvas_height,
+    };
+  }
+
+  const trimmedWidth = Math.max(1, maxX - minX + 1);
+  const trimmedHeight = Math.max(1, maxY - minY + 1);
+  const trimmedPixels: Record<string, string> = {};
+
+  for (const [coord, color] of Object.entries(pixels)) {
+    if (!color) continue;
+    const [x, y] = coord.split(",").map(Number);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const nx = x - minX;
+    const ny = y - minY;
+    trimmedPixels[`${nx},${ny}`] = color;
+  }
+
+  return {
+    ...asset,
+    canvas_width: trimmedWidth,
+    canvas_height: trimmedHeight,
+    source_width: asset.canvas_width,
+    source_height: asset.canvas_height,
+    pixel_data: trimmedPixels,
+  };
+}
+
+/**
+ * Retrieves saved tiles and objects directly from Supabase.
+ * Admin Map Generator loads all saved tiles and objects created in the studio.
+ * `onlyPublished` defaults to false so newly saved designs appear immediately in the Map Generator library.
+ */
+export async function fetchAllMapAssets(onlyPublished: boolean = false): Promise<AssetRecord[]> {
+  const map = new Map<string, AssetRecord>();
+
+  // Fetch from Supabase map_tiles & map_objects.
   try {
     const db = createClient();
 
@@ -75,7 +112,7 @@ export async function fetchAllMapAssets(onlyPublished: boolean = true): Promise<
         const isPublished = row.is_published === true;
         if (onlyPublished && !isPublished) continue;
 
-        map.set(row.id, {
+        const rawAsset: AssetRecord = {
           id: row.id,
           name: row.name || "Untitled Tile",
           category: row.category || "tiles",
@@ -85,7 +122,8 @@ export async function fetchAllMapAssets(onlyPublished: boolean = true): Promise<
           palette: Array.isArray(row.palette) ? row.palette : [],
           updated_at: row.updated_at || new Date().toISOString(),
           is_published: isPublished,
-        });
+        };
+        map.set(row.id, computeTrimmedAsset(rawAsset));
       }
     }
   } catch (err) {
@@ -107,7 +145,7 @@ export async function fetchAllMapAssets(onlyPublished: boolean = true): Promise<
         const isPublished = row.is_published === true;
         if (onlyPublished && !isPublished) continue;
 
-        map.set(row.id, {
+        const rawAsset: AssetRecord = {
           id: row.id,
           name: row.name || "Untitled Object",
           category: row.category || "object",
@@ -117,7 +155,8 @@ export async function fetchAllMapAssets(onlyPublished: boolean = true): Promise<
           palette: Array.isArray(row.palette) ? row.palette : [],
           updated_at: row.updated_at || new Date().toISOString(),
           is_published: isPublished,
-        });
+        };
+        map.set(row.id, computeTrimmedAsset(rawAsset));
       }
     }
   } catch (err) {
@@ -129,13 +168,13 @@ export async function fetchAllMapAssets(onlyPublished: boolean = true): Promise<
   );
 }
 
-export async function fetchAssets(onlyPublished: boolean = true) {
+export async function fetchAssets(onlyPublished: boolean = false) {
   return fetchAllMapAssets(onlyPublished);
 }
 
 export async function fetchAssetsByCategory(
   category: string,
-  onlyPublished: boolean = true
+  onlyPublished: boolean = false
 ): Promise<AssetRecord[]> {
   const all = await fetchAllMapAssets(onlyPublished);
   return all.filter((a) => a.category.toLowerCase() === category.toLowerCase());

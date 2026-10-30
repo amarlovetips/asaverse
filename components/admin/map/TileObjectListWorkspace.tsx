@@ -10,7 +10,7 @@ import {
   exportTileObjectJson,
   type TileObjectRecord,
 } from "./lib/tileObjectStorage";
-import { getAssetDataUrl } from "./lib/assetRenderer";
+import { getAssetDataUrl, getOccupiedAssetBounds } from "./lib/assetRenderer";
 import { adminMenuHref } from "../menu-config";
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -331,6 +331,18 @@ export default function TileObjectListWorkspace({ routeRemainder: _r = [] }: { r
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                   {section.rows.map((item) => {
                     const isBusy = busyId === item.id;
+                    const bounds = getOccupiedAssetBounds({
+                      id: item.id,
+                      name: item.name,
+                      category: item.category,
+                      canvas_width: item.canvas_width,
+                      canvas_height: item.canvas_height,
+                      pixel_data: item.pixel_data,
+                      updated_at: item.updated_at,
+                      is_published: item.is_published,
+                    });
+                    const displayW = bounds.hasPixels ? bounds.width : item.canvas_width;
+                    const displayH = bounds.hasPixels ? bounds.height : item.canvas_height;
                     const dataUrl = getAssetDataUrl({
                       id: item.id,
                       name: item.name,
@@ -384,7 +396,7 @@ export default function TileObjectListWorkspace({ routeRemainder: _r = [] }: { r
                                 {item.category}
                               </span>
                               <span className="font-mono text-slate-400">
-                                {item.canvas_width}&times;{item.canvas_height}px
+                                {displayW}&times;{displayH}px
                               </span>
                             </div>
 

@@ -7,7 +7,6 @@ import { usePixelEditorShortcuts } from "./usePixelEditorShortcuts";
 import type { ReferenceTool } from "./ReferenceToolRail";
 
 export type EditorPanel = "tools" | "image" | "save" | "load" | "publish" | "export" | "base" | "history";
-const colors = ["#171923", "#ffffff", "#f2c49b", "#754631", "#392447", "#d65b82", "#19b9ad", "#4168d9", "#b8476a", "#d69a38", "#794bd0", "#e6e6ee", "#38d9ee", "#4ae08e", "#000000", "#888888"];
 
 export function usePixelArtEditorController(options?: PixelEditorOptions) {
   const s = usePixelEditorState(options);
@@ -28,8 +27,7 @@ export function usePixelArtEditorController(options?: PixelEditorOptions) {
     if ((s.selectionKind === "magic" || s.selectionKind === "region") && s.selectedPixelCount > 0) s.recolorSelection(value);
   }
   function selectTool(tool: ReferenceTool) { s.setTool(tool); setPanel("tools"); }
-  return { s, image, panel, setPanel, confirmClear, setConfirmClear, activeColor, setActiveColor, frontOpacity, setFrontOpacity, filter, setFilter, colors, chooseColor, selectTool };
+  return { s, image, panel, setPanel, confirmClear, setConfirmClear, activeColor, setActiveColor, frontOpacity, setFrontOpacity, filter, setFilter, colors: s.palette, chooseColor, selectTool };
 }
-
 
 

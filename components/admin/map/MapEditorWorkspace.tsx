@@ -112,22 +112,21 @@ export default function MapEditorWorkspace({ routeRemainder: _r = [] }: { routeR
     try {
       await setDefaultMap(map.id);
       setMaps((prev) =>
-        prev.map((m) => ({
-          ...m,
-          is_default: m.id === map.id,
-          is_published: m.id === map.id ? true : m.is_published,
-        }))
+        prev.map((m) =>
+          m.id === map.id ? { ...m, is_default: true, is_published: false } : { ...m, is_default: false }
+        )
       );
       setMessage({
-        text: `Map "${map.name}" set as active default world map!`,
+        text: `Map "${map.name}" set as active default world map.`,
         type: "success",
       });
       setTimeout(() => setMessage(null), 3000);
     } catch (err) {
       setMessage({
-        text: err instanceof Error ? err.message : "Failed to set default map",
+        text: err instanceof Error ? `Failed to set default map: ${err.message}` : "Failed to set default map",
         type: "error",
       });
+      setTimeout(() => setMessage(null), 5000);
     } finally {
       setBusyId(null);
     }
@@ -137,26 +136,26 @@ export default function MapEditorWorkspace({ routeRemainder: _r = [] }: { routeR
   const handleDeleteMap = async (map: MapSummary) => {
     if (map.is_published) {
       setMessage({
-        text: "Cannot delete a published map. Unpublish it first.",
+        text: `Cannot delete published map "${map.name}". Unpublish it first.`,
         type: "error",
       });
       return;
     }
-    setBusyId(map.id);
     try {
       await deleteMap(map.id);
       setMaps((prev) => prev.filter((m) => m.id !== map.id));
       setDeleteConfirmMap(null);
       setMessage({
-        text: `Deleted map "${map.name}".`,
-        type: "info",
+        text: `Map "${map.name}" deleted.`,
+        type: "success",
       });
       setTimeout(() => setMessage(null), 3000);
     } catch (err) {
       setMessage({
-        text: err instanceof Error ? err.message : "Failed to delete map",
+        text: err instanceof Error ? `Failed to delete map: ${err.message}` : "Failed to delete map",
         type: "error",
       });
+      setTimeout(() => setMessage(null), 5000);
     } finally {
       setBusyId(null);
     }

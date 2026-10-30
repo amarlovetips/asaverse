@@ -28,6 +28,15 @@ const DEFAULT_LAYERS: MapLayer[] = [
   { id: "layer_objects", name: "Buildings & Trees", visible: true, locked: false, order: 1, group: "objects" },
 ];
 
+function createMapId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  return `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx`.replace(/[xy]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = char === "x" ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
+}
+
 export default function MapToolsWorkspace({
   routeRemainder = [],
   initialTool,
@@ -36,8 +45,12 @@ export default function MapToolsWorkspace({
   initialTool?: ToolMode;
 }) {
   // Map State
-  const [mapId, setMapId] = useState<string>(() => `map_${Date.now()}`);
+  const [mapId, setMapId] = useState<string>(createMapId);
   const [mapName, setMapName] = useState<string>("Untitled Map");
+  const [mapCreatedAt, setMapCreatedAt] = useState<string>(() => new Date().toISOString());
+  const [mapPublished, setMapPublished] = useState(false);
+  const [mapDefault, setMapDefault] = useState(false);
+  const [bounds, setBounds] = useState<{ width: number; height: number } | undefined>();
   const [layers, setLayers] = useState<MapLayer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>("layer_ground");
   const [placements, setPlacements] = useState<PlacedAsset[]>([]);
@@ -164,12 +177,16 @@ export default function MapToolsWorkspace({
       if (live && data) {
         setMapId(data.id);
         setMapName(data.name || "Untitled Map");
+        setMapCreatedAt(data.created_at);
+        setMapPublished(data.is_published ?? false);
+        setMapDefault(data.is_default ?? false);
+        setBounds(data.bounds);
         setLayers(data.layers?.length ? data.layers : DEFAULT_LAYERS);
         setActiveLayerId(data.layers?.[0]?.id || "layer_ground");
         setPlacements(data.placements || []);
         setBlockedAreas(data.blockedAreas || []);
-        if (data.enemySpawn) setEnemySpawn(data.enemySpawn);
-        if (data.camera) setCamera(data.camera);
+        setEnemySpawn(data.enemySpawn || { x: 3200, y: 3200, home_x: 3200, home_y: 3200 });
+        setCamera(data.camera || { x: 0, y: 0, zoom: 2 });
         setSaveStatus({ message: `Loaded map "${data.name}" for editing`, type: "success" });
         setTimeout(() => setSaveStatus(null), 3000);
       }
@@ -1376,16 +1393,16 @@ export default function MapToolsWorkspace({
         blockedAreas,
         enemySpawn,
         camera,
+        bounds,
+        is_published: mapPublished,
+        is_default: mapDefault,
         updated_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
+        created_at: mapCreatedAt,
       };
       const result = await saveMap(payload, true);
-      if (result.success) {
-        setSaveStatus({ message: result.message, type: "success" });
-      } else {
-        setSaveStatus({ message: "Save failed. Please check your connection.", type: "error" });
-      }
+      setSaveStatus({ message: result.message, type: "success" });
     } catch (err) {
+      // Supabase upsert failed. Report the real error to the user.
       setSaveStatus({
         message: err instanceof Error ? err.message : "Error saving map",
         type: "error",
@@ -1397,34 +1414,42 @@ export default function MapToolsWorkspace({
   };
 
   const handleLoadMapById = async (targetId: string) => {
-    const data = await loadMap(targetId);
-    if (!data) {
-      setSaveStatus({ message: "Could not open map: record not found", type: "error" });
-      return;
-    }
-    setMapId(data.id);
-    setMapName(data.name || "Untitled Map");
+    try {
+      const data = await loadMap(targetId);
+      setMapId(data.id);
+      setMapName(data.name || "Untitled Map");
 
-    // Ensure all loaded layers have explicit group property
-    const loadedLayers = (data.layers?.length ? data.layers : DEFAULT_LAYERS).map((l) => ({
-      ...l,
-      group: l.group || (l.id.includes("ground") || l.name.toLowerCase().includes("ground") ? "ground" : "objects") as LayerGroupType,
-    }));
-    setLayers(loadedLayers);
-    setActiveLayerId(loadedLayers[0]?.id || "layer_ground");
-    setPlacements(data.placements || []);
-    setBlockedAreas(data.blockedAreas || []);
-    if (data.enemySpawn) setEnemySpawn(data.enemySpawn);
-    if (data.camera) setCamera(data.camera);
-    setSelectedPlacementId(null);
-    setSelectedBlockedId(null);
-    setSaveStatus({ message: `Loaded map: ${data.name}`, type: "success" });
-    setTimeout(() => setSaveStatus(null), 3000);
+      // Ensure all loaded layers have explicit group property
+      const loadedLayers = (data.layers?.length ? data.layers : DEFAULT_LAYERS).map((l) => ({
+        ...l,
+        group: l.group || (l.id.includes("ground") || l.name.toLowerCase().includes("ground") ? "ground" : "objects") as LayerGroupType,
+      }));
+      setLayers(loadedLayers);
+      setActiveLayerId(loadedLayers[0]?.id || "layer_ground");
+      setPlacements(data.placements || []);
+      setBlockedAreas(data.blockedAreas || []);
+      if (data.enemySpawn) setEnemySpawn(data.enemySpawn);
+      if (data.camera) setCamera(data.camera);
+      setSelectedPlacementId(null);
+      setSelectedBlockedId(null);
+      setSaveStatus({ message: `Loaded map: ${data.name}`, type: "success" });
+      setTimeout(() => setSaveStatus(null), 3000);
+    } catch (err) {
+      // Supabase was the source of truth and it failed / returned nothing.
+      setSaveStatus({
+        message: err instanceof Error ? err.message : `Could not open map: record not found`,
+        type: "error",
+      });
+    }
   };
 
   const handleNewMap = () => {
-    setMapId(`map_${Date.now()}`);
+    setMapId(createMapId());
     setMapName("Untitled Map");
+    setMapCreatedAt(new Date().toISOString());
+    setMapPublished(false);
+    setMapDefault(false);
+    setBounds(undefined);
     setLayers(DEFAULT_LAYERS);
     setActiveLayerId("layer_ground");
     setPlacements([]);
@@ -1745,8 +1770,11 @@ export default function MapToolsWorkspace({
                   blockedAreas,
                   enemySpawn,
                   camera,
+                  bounds,
+                  is_published: mapPublished,
+                  is_default: mapDefault,
                   updated_at: new Date().toISOString(),
-                  created_at: new Date().toISOString(),
+                  created_at: mapCreatedAt,
                 };
                 exportMapJson(payload);
                 setSaveStatus({ message: "Map JSON exported and downloaded successfully!", type: "success" });
