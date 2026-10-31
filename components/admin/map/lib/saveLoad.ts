@@ -46,6 +46,16 @@ export type MapLayer = {
   opacity?: number; // 0 to 1, defaults to 1
 };
 
+export function normalizeLayerGroup(layer?: Partial<MapLayer> | string | null): LayerGroupType {
+  const raw = typeof layer === "string" ? layer : (layer?.group ?? layer?.name ?? layer?.id ?? "");
+  const normalized = String(raw).toLowerCase();
+
+  if (normalized.includes("ground")) return "ground";
+  if (normalized.includes("block")) return "blocked";
+  if (normalized.includes("object") || normalized.includes("building") || normalized.includes("tree")) return "objects";
+  return "objects";
+}
+
 export type BlockedArea = {
   id: string;
   x: number;
@@ -95,6 +105,221 @@ export type MapSummary = {
 
 const MAX_SAVED_VERSIONS = 10;
 
+export function pruneMapVersionHistory(versionIds: string[], maxVersions: number): string[] {
+  if (versionIds.length <= maxVersions) return [];
+  return versionIds.slice(maxVersions);
+}
+
+export function buildPlacementSpatialIndex(placements: PlacedAsset[], layerId: string, cellSize = 16): Map<string, PlacedAsset[]> {
+  const index = new Map<string, PlacedAsset[]>();
+  for (const placement of placements) {
+    if (placement.layerId !== layerId) continue;
+    const startX = Math.floor(placement.x / cellSize);
+    const startY = Math.floor(placement.y / cellSize);
+    const endX = Math.floor((placement.x + placement.width) / cellSize);
+    const endY = Math.floor((placement.y + placement.height) / cellSize);
+
+    for (let x = startX; x <= endX; x += 1) {
+      for (let y = startY; y <= endY; y += 1) {
+        const key = `${x}:${y}`;
+        const bucket = index.get(key) ?? [];
+        bucket.push(placement);
+        index.set(key, bucket);
+      }
+    }
+  }
+  return index;
+}
+
+export function rectsIntersect(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number }
+): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+export function resolveNonOverwritePlacement({
+  x,
+  y,
+  width,
+  height,
+  layerId,
+  placements,
+  snapToGrid,
+  cellSize = 16,
+}: {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  layerId: string;
+  placements: PlacedAsset[];
+  snapToGrid: boolean;
+  cellSize?: number;
+}): { x: number; y: number; overlapped: boolean } {
+  const step = snapToGrid ? Math.max(1, cellSize) : 1;
+  const spatialIndex = buildPlacementSpatialIndex(placements, layerId, step);
+  const hasOverlap = (candidateX: number, candidateY: number) => {
+    const candidateRect = { x: candidateX, y: candidateY, width, height };
+    const minBucketX = Math.floor((candidateX - 1) / step);
+    const maxBucketX = Math.floor((candidateX + width + 1) / step);
+    const minBucketY = Math.floor((candidateY - 1) / step);
+    const maxBucketY = Math.floor((candidateY + height + 1) / step);
+
+    for (let bx = minBucketX; bx <= maxBucketX; bx += 1) {
+      for (let by = minBucketY; by <= maxBucketY; by += 1) {
+        const bucket = spatialIndex.get(`${bx}:${by}`);
+        if (!bucket) continue;
+        for (const placement of bucket) {
+          if (placement.id === "") continue;
+          if (rectsIntersect(candidateRect, placement)) return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  if (!hasOverlap(x, y)) {
+    return { x, y, overlapped: false };
+  }
+
+  const maxRadius = Math.max(1024, step * 64, Math.max(width, height) * 8);
+  const candidates: Array<{ x: number; y: number }> = [];
+  for (let radius = step; radius <= maxRadius; radius += step) {
+    for (let dx = -radius; dx <= radius; dx += step) {
+      for (let dy = -radius; dy <= radius; dy += step) {
+        if (Math.abs(dx) + Math.abs(dy) !== radius) continue;
+        candidates.push({ x: x + dx, y: y + dy });
+      }
+    }
+  }
+
+  candidates.sort((a, b) => {
+    const aDistance = Math.abs(a.x - x) + Math.abs(a.y - y);
+    const bDistance = Math.abs(b.x - x) + Math.abs(b.y - y);
+    return aDistance - bDistance || Math.abs(a.x - x) - Math.abs(b.x - x) || Math.abs(a.y - y) - Math.abs(b.y - y);
+  });
+
+  for (const candidate of candidates) {
+    if (!hasOverlap(candidate.x, candidate.y)) {
+      return { x: candidate.x, y: candidate.y, overlapped: true };
+    }
+  }
+
+  return { x, y, overlapped: true };
+}
+
+export function transformPlacementSelection(
+  placements: PlacedAsset[],
+  selectedIds: string[],
+  mode: "horizontal" | "vertical" | "rotate-left" | "rotate-right" | "reset-rotation"
+): PlacedAsset[] {
+  if (!selectedIds.length) return placements;
+
+  const selected = placements.filter((p) => selectedIds.includes(p.id));
+  if (!selected.length) return placements;
+
+  const minX = Math.min(...selected.map((p) => p.x));
+  const maxX = Math.max(...selected.map((p) => p.x + p.width));
+  const minY = Math.min(...selected.map((p) => p.y));
+  const maxY = Math.max(...selected.map((p) => p.y + p.height));
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  return placements.map((p) => {
+    if (!selectedIds.includes(p.id)) return p;
+
+    const rotation = typeof p.rotation === "number" ? p.rotation : 0;
+
+    if (mode === "horizontal") {
+      return {
+        ...p,
+        x: 2 * centerX - (p.x + p.width),
+      };
+    }
+
+    if (mode === "vertical") {
+      return {
+        ...p,
+        y: 2 * centerY - (p.y + p.height),
+      };
+    }
+
+    if (mode === "reset-rotation") {
+      return {
+        ...p,
+        rotation: 0,
+      };
+    }
+
+    const nextRotation = ((rotation + (mode === "rotate-left" ? -90 : 90)) % 360 + 360) % 360;
+    const isOrthogonal = Math.abs(nextRotation % 180) < 0.0001 || Math.abs((nextRotation + 180) % 180) < 0.0001;
+    const nextWidth = isOrthogonal ? p.width : p.height;
+    const nextHeight = isOrthogonal ? p.height : p.width;
+    const currentCenterX = p.x + p.width / 2;
+    const currentCenterY = p.y + p.height / 2;
+
+    return {
+      ...p,
+      width: nextWidth,
+      height: nextHeight,
+      x: currentCenterX - nextWidth / 2,
+      y: currentCenterY - nextHeight / 2,
+      rotation: nextRotation,
+    };
+  });
+}
+
+export function compactMapData<T extends SavedMapData>(mapData: T): T {
+  const compactLayers = mapData.layers.map(({ id, name, visible, locked, order, group, opacity }) => ({
+    id,
+    name,
+    visible,
+    locked,
+    order,
+    group,
+    opacity,
+  }));
+
+  const compactPlacements = mapData.placements.map(({ id, assetId, name, x, y, width, height, layerId, opacity, collisionMode, collision, occlusionDepth }) => ({
+    id,
+    assetId,
+    name,
+    x,
+    y,
+    width,
+    height,
+    layerId,
+    opacity,
+    collisionMode,
+    collision: collision ? { x: collision.x, y: collision.y, width: collision.width, height: collision.height } : null,
+    occlusionDepth,
+  }));
+
+  const compactBlockedAreas = (mapData.blockedAreas || []).map(({ id, x, y, width, height, shape, points, label, layerId, opacity }) => ({
+    id,
+    x,
+    y,
+    width,
+    height,
+    shape,
+    points,
+    label,
+    layerId,
+    opacity,
+  }));
+
+  return {
+    ...mapData,
+    layers: compactLayers,
+    placements: compactPlacements,
+    blockedAreas: compactBlockedAreas,
+    enemySpawn: mapData.enemySpawn,
+    camera: mapData.camera,
+    bounds: mapData.bounds,
+  } as T;
+}
+
 function createUuid(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
@@ -132,7 +357,10 @@ export async function pushMapVersion(mapData: SavedMapData): Promise<void> {
     });
   if (insertError) throw insertError;
   if (remoteVersions && remoteVersions.length >= MAX_SAVED_VERSIONS) {
-    const toDelete = remoteVersions.slice(MAX_SAVED_VERSIONS - 1).map((v: { id: string }) => v.id);
+    const toDelete = pruneMapVersionHistory(
+      remoteVersions.map((v: { id: string }) => v.id),
+      MAX_SAVED_VERSIONS
+    );
     if (toDelete.length > 0) {
       const { error: deleteError } = await db.from("map_version_history").delete().in("id", toDelete);
       if (deleteError) throw deleteError;
@@ -165,8 +393,7 @@ export async function saveMap(
   createHistoryEntry = true
 ): Promise<{ id: string; success: boolean; message: string }> {
   const now = new Date().toISOString();
-  mapData.updated_at = now;
-  if (!mapData.created_at) mapData.created_at = now;
+  const compact = compactMapData({ ...mapData, updated_at: now, created_at: mapData.created_at || now });
 
   const db = createClient();
   const { data: { user }, error: authError } = await db.auth.getUser();
@@ -176,12 +403,12 @@ export async function saveMap(
       .from("saved_maps")
       .upsert(
         {
-          id: mapData.id,
+          id: compact.id,
           user_id: user?.id || null,
-          name: mapData.name,
-          map_data: mapData,
-          is_published: mapData.is_published ?? false,
-          is_default: mapData.is_default ?? false,
+          name: compact.name,
+          map_data: compact,
+          is_published: compact.is_published ?? false,
+          is_default: compact.is_default ?? false,
           updated_at: now,
         },
         { onConflict: "id" }
@@ -192,8 +419,8 @@ export async function saveMap(
   if (savedError || !savedRecord?.id) {
     throw new Error(`Map save failed: ${savedError?.message || "database did not return the saved record"}`);
   }
-  if (createHistoryEntry) await pushMapVersion(mapData);
-  return { id: savedRecord.id, success: true, message: `Map "${mapData.name}" saved to database.` };
+  if (createHistoryEntry) await pushMapVersion(compact);
+  return { id: savedRecord.id, success: true, message: `Map "${compact.name}" saved to database.` };
 }
 
 /**
@@ -436,55 +663,17 @@ export function exportMapJson(mapData: SavedMapData) {
     format: "asaverse-map",
     version: 2,
     exported_at: new Date().toISOString(),
-    map: {
-      id: mapData.id,
-      name: mapData.name,
-      layers: mapData.layers.map((l) => ({
-        id: l.id,
-        name: l.name,
-        visible: l.visible,
-        locked: l.locked,
-        order: l.order,
-        group: l.group || (l.id.includes("ground") ? "ground" : "objects"),
-        opacity: l.opacity !== undefined ? l.opacity : 1,
-      })),
+    map: compactMapData({
+      ...mapData,
+      layers: mapData.layers.map((l) => ({ ...l, group: l.group || (l.id.includes("ground") ? "ground" : "objects") })),
       placements: mapData.placements.map((p) => ({
-        id: p.id,
-        assetId: p.assetId,
-        name: p.name,
-        x: p.x,
-        y: p.y,
-        width: p.width,
-        height: p.height,
-        scaleX: p.scaleX,
-        scaleY: p.scaleY,
-        rotation: p.rotation,
+        ...p,
         opacity: p.opacity !== undefined ? p.opacity : 1,
-        layerId: p.layerId,
         collision: p.collision || null,
         collisionMode: p.collisionMode || "walkable",
-        occlusionDepth: p.occlusionDepth,
       })),
-      blockedAreas: (mapData.blockedAreas || []).map((b) => ({
-        id: b.id,
-        x: b.x,
-        y: b.y,
-        width: b.width,
-        height: b.height,
-        shape: b.shape || "rectangle",
-        points: b.points || [],
-        label: b.label || "Blocked",
-        layerId: b.layerId,
-        opacity: b.opacity,
-      })),
-      camera: mapData.camera,
-      bounds: mapData.bounds,
-      enemySpawn: mapData.enemySpawn,
-      is_published: mapData.is_published,
-      is_default: mapData.is_default,
-      updated_at: mapData.updated_at,
-      created_at: mapData.created_at,
-    },
+      blockedAreas: (mapData.blockedAreas || []).map((b) => ({ ...b, shape: b.shape || "rectangle", points: b.points || [], label: b.label || "Blocked" })),
+    }),
   };
 
   const blob = new Blob([JSON.stringify(payload, null, 2)], {

@@ -2,6 +2,13 @@ import type { AssetRecord } from "./supabaseAssets";
 
 const dataUrlCache = new Map<string, string>();
 const canvasCache = new Map<string, HTMLCanvasElement>();
+const previewCanvasCache = new Map<string, HTMLCanvasElement>();
+
+export function clearAssetRenderCaches(): void {
+  dataUrlCache.clear();
+  canvasCache.clear();
+  previewCanvasCache.clear();
+}
 
 /**
  * Computes tight bounding box of non-transparent artwork pixels, excluding empty outer margins.
@@ -111,6 +118,30 @@ export function getAssetDataUrl(asset: AssetRecord): string {
 /**
  * Draws an asset onto a 2D rendering context at screen coordinates with sharp pixel scaling.
  */
+export function getOrCreatePreviewCanvas(asset: AssetRecord, zoom: number): HTMLCanvasElement | null {
+  if (typeof window === "undefined") return null;
+  const baseCanvas = getOrCreateAssetCanvas(asset);
+  if (!baseCanvas) return null;
+
+  const previewScale = zoom < 0.8 ? 0.5 : zoom < 1.25 ? 0.75 : 1;
+  const width = Math.max(1, Math.round(baseCanvas.width * previewScale));
+  const height = Math.max(1, Math.round(baseCanvas.height * previewScale));
+  const cacheKey = `${asset.id}_${asset.updated_at}_${width}x${height}_${previewScale}`;
+  if (previewCanvasCache.has(cacheKey)) return previewCanvasCache.get(cacheKey)!;
+
+  const preview = document.createElement("canvas");
+  preview.width = width;
+  preview.height = height;
+  const previewCtx = preview.getContext("2d");
+  if (!previewCtx) return baseCanvas;
+  previewCtx.imageSmoothingEnabled = false;
+  previewCtx.clearRect(0, 0, width, height);
+  previewCtx.drawImage(baseCanvas, 0, 0, width, height);
+
+  previewCanvasCache.set(cacheKey, preview);
+  return preview;
+}
+
 export function drawAssetToContext(
   ctx: CanvasRenderingContext2D,
   asset: AssetRecord,
@@ -119,17 +150,16 @@ export function drawAssetToContext(
   zoom: number,
   opacity: number = 1,
   targetWidth?: number,
-  targetHeight?: number
+  targetHeight?: number,
+  rotationDegrees: number = 0
 ) {
   const canvas = getOrCreateAssetCanvas(asset);
   if (!canvas) return;
 
   const effWidth = targetWidth !== undefined ? targetWidth : asset.canvas_width;
   const effHeight = targetHeight !== undefined ? targetHeight : asset.canvas_height;
+  const previewCanvas = zoom < 1.25 ? getOrCreatePreviewCanvas(asset, zoom) ?? canvas : canvas;
 
-  // Exact integer pixel rounding for screen coordinates and dimensions
-  // Math.round(screenX + w) - Math.round(screenX) ensures adjacent tiles at (x) and (x+w)
-  // have right edge of first tile == left edge of next tile with ZERO gap or seam at any zoom level.
   const rScreenX = Math.round(screenX);
   const rScreenY = Math.round(screenY);
   const rScreenRight = Math.round(screenX + effWidth * zoom);
@@ -140,7 +170,17 @@ export function drawAssetToContext(
   ctx.save();
   ctx.imageSmoothingEnabled = false;
   if (opacity < 1) ctx.globalAlpha = opacity;
-  ctx.drawImage(canvas, rScreenX, rScreenY, w, h);
+
+  if (rotationDegrees !== 0) {
+    const radians = (rotationDegrees * Math.PI) / 180;
+    const centerX = rScreenX + w / 2;
+    const centerY = rScreenY + h / 2;
+    ctx.translate(centerX, centerY);
+    ctx.rotate(radians);
+    ctx.translate(-centerX, -centerY);
+  }
+
+  ctx.drawImage(previewCanvas, rScreenX, rScreenY, w, h);
   ctx.restore();
 }
 

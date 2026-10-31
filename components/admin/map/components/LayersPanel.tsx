@@ -36,19 +36,20 @@ export default function LayersPanel({
   const [editingName, setEditingName] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [opacityMenuId, setOpacityMenuId] = useState<string | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState({ ground: true, objects: true, blocked: true });
 
   // Group layers into Ground, Buildings & Trees, and Blocked Areas
   const groundLayers = layers
-    .filter((l) => (l.group ? l.group === "ground" : l.id.includes("ground")))
-    .sort((a, b) => b.order - a.order);
+    .filter((l) => (l.group === "ground" || (!l.group && /ground/i.test(l.name || l.id))))
+    .sort((a, b) => a.order - b.order);
 
   const objectLayers = layers
-    .filter((l) => (l.group ? l.group === "objects" : (!l.id.includes("ground") && !l.id.includes("block"))))
-    .sort((a, b) => b.order - a.order);
+    .filter((l) => (l.group === "objects" || (!l.group && !/ground|block/i.test(l.name || l.id))))
+    .sort((a, b) => a.order - b.order);
 
   const blockedLayers = layers
-    .filter((l) => l.group === "blocked" || l.id.includes("block"))
-    .sort((a, b) => b.order - a.order);
+    .filter((l) => l.group === "blocked" || /block/i.test(l.name || l.id))
+    .sort((a, b) => a.order - b.order);
 
   function startRename(layer: MapLayer) {
     setEditingId(layer.id);
@@ -93,8 +94,8 @@ export default function LayersPanel({
                     : "border-slate-800 bg-slate-900/50 hover:border-slate-700 hover:bg-slate-900"
                 }`}
               >
-                <div className="flex items-center justify-between gap-1">
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                <div className="relative flex items-center justify-between gap-1">
+                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
                     {/* Visibility Toggle */}
                     <button
                       type="button"
@@ -143,7 +144,7 @@ export default function LayersPanel({
                     </button>
 
                     {/* Name / Inline rename */}
-                    <div className="min-w-0 flex-1">
+                    <div className="min-w-0 flex-1 overflow-hidden">
                       {editingId === layer.id ? (
                         <input
                           type="text"
@@ -188,7 +189,7 @@ export default function LayersPanel({
                   </div>
 
                   {/* Action Buttons: Opacity, Reorder, Rename, Delete */}
-                  <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                  <div className="z-10 flex shrink-0 items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                     {/* Opacity Trigger */}
                     <button
                       type="button"
@@ -295,90 +296,47 @@ export default function LayersPanel({
 
   return (
     <div className="flex h-full w-full flex-col bg-[#0d1424] text-slate-200">
-      {/* Header */}
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
         <div className="flex items-center gap-2">
           <svg className="h-4 w-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
           </svg>
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-            Layers ({layers.length})
-          </span>
+          <span className="text-xs font-bold uppercase tracking-wider text-slate-300">Layers ({layers.length})</span>
         </div>
       </div>
 
-      {/* Split Layer Groups Container */}
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
-        {/* GROUP A: Ground Layers */}
         <div className="rounded-xl border border-emerald-950/60 bg-emerald-950/10 p-2.5">
           <div className="mb-2.5 flex items-center justify-between border-b border-emerald-900/40 pb-2">
-            <div className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">
-                Ground Layers ({groundLayers.length})
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => onAddLayer("ground")}
-              className="flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/25 transition"
-              title="Add new walkable ground layer"
-            >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add Ground
+            <button type="button" onClick={() => setExpandedGroups((prev) => ({ ...prev, ground: !prev.ground }))} className="flex items-center gap-1.5 text-left">
+              <span className="text-xs font-bold uppercase tracking-wider text-emerald-300">GROUND ({groundLayers.length})</span>
+              <span className="text-[10px] text-emerald-400">{expandedGroups.ground ? "▾" : "▸"}</span>
             </button>
+            <button type="button" onClick={() => onAddLayer("ground")} className="rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-300">+ Ground</button>
           </div>
-          {renderLayerList(groundLayers, "ground")}
+          {expandedGroups.ground && renderLayerList(groundLayers, "ground")}
         </div>
 
-        {/* GROUP B: Buildings & Trees Layers */}
         <div className="rounded-xl border border-cyan-950/60 bg-cyan-950/10 p-2.5">
           <div className="mb-2.5 flex items-center justify-between border-b border-cyan-900/40 pb-2">
-            <div className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-cyan-400" />
-              <span className="text-xs font-bold uppercase tracking-wider text-cyan-300">
-                Buildings &amp; Trees ({objectLayers.length})
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => onAddLayer("objects")}
-              className="flex items-center gap-1 rounded-md border border-cyan-500/40 bg-cyan-500/15 px-2 py-0.5 text-[11px] font-medium text-cyan-300 hover:bg-cyan-500/25 transition"
-              title="Add new buildings/objects layer"
-            >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add Object
+            <button type="button" onClick={() => setExpandedGroups((prev) => ({ ...prev, objects: !prev.objects }))} className="flex items-center gap-1.5 text-left">
+              <span className="text-xs font-bold uppercase tracking-wider text-cyan-300">BUILDING &amp; TREE ({objectLayers.length})</span>
+              <span className="text-[10px] text-cyan-400">{expandedGroups.objects ? "▾" : "▸"}</span>
             </button>
+            <button type="button" onClick={() => onAddLayer("objects")} className="rounded-md border border-cyan-500/40 bg-cyan-500/15 px-2 py-0.5 text-[11px] text-cyan-300">+ Object</button>
           </div>
-          {renderLayerList(objectLayers, "objects")}
+          {expandedGroups.objects && renderLayerList(objectLayers, "objects")}
         </div>
 
-        {/* GROUP C: Dedicated Blocked Areas Layer */}
         <div className="rounded-xl border border-red-950/60 bg-red-950/10 p-2.5">
           <div className="mb-2.5 flex items-center justify-between border-b border-red-900/40 pb-2">
-            <div className="flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-red-500" />
-              <span className="text-xs font-bold uppercase tracking-wider text-red-300">
-                Blocked Collision ({blockedLayers.length})
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => onAddLayer("blocked")}
-              className="flex items-center gap-1 rounded-md border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[11px] font-medium text-red-300 hover:bg-red-500/25 transition"
-              title="Add dedicated blocked collision layer"
-            >
-              <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-              </svg>
-              Add Blocked
+            <button type="button" onClick={() => setExpandedGroups((prev) => ({ ...prev, blocked: !prev.blocked }))} className="flex items-center gap-1.5 text-left">
+              <span className="text-xs font-bold uppercase tracking-wider text-red-300">Collision ({blockedLayers.length})</span>
+              <span className="text-[10px] text-red-400">{expandedGroups.blocked ? "▾" : "▸"}</span>
             </button>
+            <button type="button" onClick={() => onAddLayer("blocked")} className="rounded-md border border-red-500/40 bg-red-500/15 px-2 py-0.5 text-[11px] text-red-300">+ Blocked</button>
           </div>
-          {renderLayerList(blockedLayers, "blocked")}
+          {expandedGroups.blocked && renderLayerList(blockedLayers, "blocked")}
         </div>
       </div>
 

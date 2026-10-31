@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Undo2, Redo2 } from "lucide-react";
 import { fetchAllMapAssets, type AssetRecord } from "./lib/supabaseAssets";
-import { drawAssetToContext } from "./lib/assetRenderer";
+import { clearAssetRenderCaches, drawAssetToContext } from "./lib/assetRenderer";
 import {
   saveMap,
   loadMap,
+  normalizeLayerGroup,
+  transformPlacementSelection,
   type MapLayer,
   type PlacedAsset,
   type SavedMapData,
@@ -16,7 +19,14 @@ import {
   type BlockedShapeType,
   type ShapePoint,
   exportMapJson,
+  resolveNonOverwritePlacement,
 } from "./lib/saveLoad";
+import {
+  getAdaptiveRenderScale,
+  getRenderViewport,
+  getVisibleBlockedAreas,
+  getVisiblePlacements,
+} from "./lib/renderEngine";
 import AssetPickerModal from "./components/AssetPickerModal";
 import LayersPanel from "./components/LayersPanel";
 import SavedMapsModal from "./components/SavedMapsModal";
@@ -27,6 +37,24 @@ const DEFAULT_LAYERS: MapLayer[] = [
   { id: "layer_ground", name: "Ground", visible: true, locked: false, order: 0, group: "ground" },
   { id: "layer_objects", name: "Buildings & Trees", visible: true, locked: false, order: 1, group: "objects" },
 ];
+
+type MapHistorySnapshot = {
+  mapId: string;
+  mapName: string;
+  mapCreatedAt: string;
+  mapPublished: boolean;
+  mapDefault: boolean;
+  bounds?: { width: number; height: number };
+  layers: MapLayer[];
+  placements: PlacedAsset[];
+  blockedAreas: BlockedArea[];
+  enemySpawn: { x: number; y: number; home_x?: number; home_y?: number };
+  camera: { x: number; y: number; zoom: number };
+};
+
+function cloneSnapshot<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
 
 function createMapId() {
   if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
@@ -73,6 +101,7 @@ export default function MapToolsWorkspace({
   };
   const [selectedBlockedId, setSelectedBlockedId] = useState<string | null>(null);
   const [snapToGrid, setSnapToGrid] = useState<boolean>(true);
+  const [nonOverwritePlacement, setNonOverwritePlacement] = useState<boolean>(false);
   const [proportionalScale, setProportionalScale] = useState<boolean>(true);
   const [blockedShapeMode, setBlockedShapeMode] = useState<BlockedShapeType>("rectangle");
   const [polygonPoints, setPolygonPoints] = useState<ShapePoint[]>([]);
@@ -104,6 +133,7 @@ export default function MapToolsWorkspace({
   // Pointer & Drag Interaction Ref State
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const renderQueuedRef = useRef<boolean>(false);
   const mouseWorldPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const isPanning = useRef<boolean>(false);
   const panStart = useRef<{ clientX: number; clientY: number; camX: number; camY: number }>({
@@ -114,6 +144,10 @@ export default function MapToolsWorkspace({
   });
   const isDraggingPlacement = useRef<boolean>(false);
   const dragPlacementOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const dragPlacementPreviewRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const isDraggingBlocked = useRef<boolean>(false);
+  const dragBlockedOffset = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const dragBlockedStart = useRef<{ id: string | null; x: number; y: number }>({ id: null, x: 0, y: 0 });
   const isDrawingBlocked = useRef<boolean>(false);
   const blockedBoxStart = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -127,6 +161,181 @@ export default function MapToolsWorkspace({
     for (const a of assets) map.set(a.id, a);
     return map;
   }, [assets]);
+
+  const historyRef = useRef<{ past: MapHistorySnapshot[]; future: MapHistorySnapshot[] }>({ past: [], future: [] });
+  const transientHistoryRef = useRef<MapHistorySnapshot | null>(null);
+  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
+
+  const placementsRef = useRef(placements);
+  const selectedPlacementIdsRef = useRef(selectedPlacementIds);
+  const selectedBlockedIdRef = useRef(selectedBlockedId);
+  const activeLayerIdRef = useRef(activeLayerId);
+  const blockedAreasRef = useRef(blockedAreas);
+  const cameraRef = useRef(camera);
+
+  useEffect(() => {
+    placementsRef.current = placements;
+  }, [placements]);
+  useEffect(() => {
+    selectedPlacementIdsRef.current = selectedPlacementIds;
+  }, [selectedPlacementIds]);
+  useEffect(() => {
+    selectedBlockedIdRef.current = selectedBlockedId;
+  }, [selectedBlockedId]);
+  useEffect(() => {
+    activeLayerIdRef.current = activeLayerId;
+  }, [activeLayerId]);
+  useEffect(() => {
+    blockedAreasRef.current = blockedAreas;
+  }, [blockedAreas]);
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
+
+  const captureMapSnapshot = useCallback((): MapHistorySnapshot => ({
+    mapId,
+    mapName,
+    mapCreatedAt,
+    mapPublished,
+    mapDefault,
+    bounds,
+    layers,
+    placements,
+    blockedAreas,
+    enemySpawn,
+    camera,
+  }), [mapId, mapName, mapCreatedAt, mapPublished, mapDefault, bounds, layers, placements, blockedAreas, enemySpawn, camera]);
+
+  const hasSnapshotChanged = useCallback((before: MapHistorySnapshot, after: MapHistorySnapshot) => {
+    const baseChecks = [
+      before.mapId !== after.mapId,
+      before.mapName !== after.mapName,
+      before.mapCreatedAt !== after.mapCreatedAt,
+      before.mapPublished !== after.mapPublished,
+      before.mapDefault !== after.mapDefault,
+      before.bounds?.width !== after.bounds?.width,
+      before.bounds?.height !== after.bounds?.height,
+      before.enemySpawn.x !== after.enemySpawn.x,
+      before.enemySpawn.y !== after.enemySpawn.y,
+      before.camera.x !== after.camera.x,
+      before.camera.y !== after.camera.y,
+      before.camera.zoom !== after.camera.zoom,
+    ];
+    if (baseChecks.some(Boolean)) return true;
+    if (before.layers.length !== after.layers.length) return true;
+    if (before.placements.length !== after.placements.length) return true;
+    if (before.blockedAreas.length !== after.blockedAreas.length) return true;
+    for (let index = 0; index < Math.max(before.layers.length, after.layers.length); index += 1) {
+      const a = before.layers[index];
+      const b = after.layers[index];
+      if (!a || !b || a.id !== b.id || a.name !== b.name || a.visible !== b.visible || a.locked !== b.locked || a.order !== b.order || a.group !== b.group || (a.opacity ?? 1) !== (b.opacity ?? 1)) {
+        return true;
+      }
+    }
+    for (let index = 0; index < Math.max(before.placements.length, after.placements.length); index += 1) {
+      const a = before.placements[index];
+      const b = after.placements[index];
+      if (!a || !b || a.id !== b.id || a.assetId !== b.assetId || a.layerId !== b.layerId || a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height || a.rotation !== b.rotation || (a.opacity ?? 1) !== (b.opacity ?? 1) || a.collisionMode !== b.collisionMode) {
+        return true;
+      }
+    }
+    for (let index = 0; index < Math.max(before.blockedAreas.length, after.blockedAreas.length); index += 1) {
+      const a = before.blockedAreas[index];
+      const b = after.blockedAreas[index];
+      if (!a || !b || a.id !== b.id || a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height || a.shape !== b.shape || a.layerId !== b.layerId || (a.opacity ?? 0.4) !== (b.opacity ?? 0.4)) {
+        return true;
+      }
+    }
+    return false;
+  }, []);
+
+  const syncHistoryState = useCallback(() => {
+    setHistoryState({
+      canUndo: historyRef.current.past.length > 0,
+      canRedo: historyRef.current.future.length > 0,
+    });
+  }, []);
+
+  const applyMapSnapshot = useCallback((snapshot: MapHistorySnapshot) => {
+    setMapId(snapshot.mapId);
+    setMapName(snapshot.mapName);
+    setMapCreatedAt(snapshot.mapCreatedAt);
+    setMapPublished(snapshot.mapPublished);
+    setMapDefault(snapshot.mapDefault);
+    setBounds(snapshot.bounds);
+    setLayers(snapshot.layers);
+    setActiveLayerId(snapshot.layers[0]?.id || "layer_ground");
+    setPlacements(snapshot.placements);
+    setBlockedAreas(snapshot.blockedAreas);
+    setEnemySpawn(snapshot.enemySpawn);
+    setCamera(snapshot.camera || { x: 0, y: 0, zoom: 2 });
+    setSelectedPlacementId(null);
+    setSelectedBlockedId(null);
+  }, []);
+
+  const commitHistoryEntry = useCallback((before: MapHistorySnapshot, after: MapHistorySnapshot) => {
+    if (!hasSnapshotChanged(before, after)) return;
+    historyRef.current.past.push(cloneSnapshot(before));
+    if (historyRef.current.past.length > 80) historyRef.current.past.shift();
+    historyRef.current.future = [];
+    syncHistoryState();
+  }, [hasSnapshotChanged, syncHistoryState]);
+
+  const beginHistorySegment = useCallback(() => {
+    transientHistoryRef.current = captureMapSnapshot();
+  }, [captureMapSnapshot]);
+
+  const endHistorySegment = useCallback(() => {
+    const before = transientHistoryRef.current;
+    if (!before) return;
+    transientHistoryRef.current = null;
+    commitHistoryEntry(before, captureMapSnapshot());
+  }, [captureMapSnapshot, commitHistoryEntry]);
+
+  const resetHistory = useCallback((snapshot: MapHistorySnapshot) => {
+    historyRef.current = { past: [], future: [] };
+    syncHistoryState();
+    applyMapSnapshot(snapshot);
+  }, [applyMapSnapshot, syncHistoryState]);
+
+  const handleUndo = useCallback(() => {
+    if (!historyRef.current.past.length) return;
+    const before = captureMapSnapshot();
+    const previous = historyRef.current.past.pop();
+    if (!previous) return;
+    historyRef.current.future.push(cloneSnapshot(before));
+    applyMapSnapshot(previous);
+    syncHistoryState();
+  }, [applyMapSnapshot, captureMapSnapshot, syncHistoryState]);
+
+  const handleRedo = useCallback(() => {
+    if (!historyRef.current.future.length) return;
+    const before = captureMapSnapshot();
+    const next = historyRef.current.future.pop();
+    if (!next) return;
+    historyRef.current.past.push(cloneSnapshot(before));
+    applyMapSnapshot(next);
+    syncHistoryState();
+  }, [applyMapSnapshot, captureMapSnapshot, syncHistoryState]);
+
+  const cleanupEditorRuntime = useCallback(() => {
+    dragPlacementPreviewRef.current.clear();
+    transientHistoryRef.current = null;
+    renderQueuedRef.current = false;
+    historyRef.current = { past: [], future: [] };
+    clearAssetRenderCaches();
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      cleanupEditorRuntime();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      cleanupEditorRuntime();
+    };
+  }, [cleanupEditorRuntime]);
 
   // Load assets from Supabase
   const loadAssets = useCallback(async () => {
@@ -187,6 +396,19 @@ export default function MapToolsWorkspace({
         setBlockedAreas(data.blockedAreas || []);
         setEnemySpawn(data.enemySpawn || { x: 3200, y: 3200, home_x: 3200, home_y: 3200 });
         setCamera(data.camera || { x: 0, y: 0, zoom: 2 });
+        resetHistory({
+          mapId: data.id,
+          mapName: data.name || "Untitled Map",
+          mapCreatedAt: data.created_at,
+          mapPublished: data.is_published ?? false,
+          mapDefault: data.is_default ?? false,
+          bounds: data.bounds,
+          layers: data.layers?.length ? data.layers : DEFAULT_LAYERS,
+          placements: data.placements || [],
+          blockedAreas: data.blockedAreas || [],
+          enemySpawn: data.enemySpawn || { x: 3200, y: 3200, home_x: 3200, home_y: 3200 },
+          camera: data.camera || { x: 0, y: 0, zoom: 2 },
+        });
         setSaveStatus({ message: `Loaded map "${data.name}" for editing`, type: "success" });
         setTimeout(() => setSaveStatus(null), 3000);
       }
@@ -195,7 +417,7 @@ export default function MapToolsWorkspace({
     return () => {
       live = false;
     };
-  }, [routeRemainder]);
+  }, [routeRemainder, resetHistory]);
 
   // Convert Client / Screen Coords to World Coords
   const screenToWorld = useCallback(
@@ -327,6 +549,25 @@ export default function MapToolsWorkspace({
     [snapToGrid, placements]
   );
 
+  const resolvePlacementCoordinates = useCallback(
+    (worldX: number, worldY: number, width: number, height: number, layerId: string) => {
+      const snapped = snapCoords(worldX, worldY, width, height);
+      if (!nonOverwritePlacement) return snapped;
+      const resolved = resolveNonOverwritePlacement({
+        x: snapped.x,
+        y: snapped.y,
+        width,
+        height,
+        layerId,
+        placements,
+        snapToGrid,
+        cellSize: 16,
+      });
+      return { x: resolved.x, y: resolved.y };
+    },
+    [nonOverwritePlacement, placements, snapCoords, snapToGrid]
+  );
+
   // Active placement reference
   const activePlacement = placements.find((p) => p.id === selectedPlacementId);
 
@@ -388,19 +629,38 @@ export default function MapToolsWorkspace({
 
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-
-    // Sort layers by order ascending (draw bottom layer first)
+    const viewport = getRenderViewport(camera, canvas.width, canvas.height);
+    const renderScale = getAdaptiveRenderScale(camera.zoom);
     const sortedLayers = [...layers].sort((a, b) => a.order - b.order);
+    const previewPlacements = new Map<string, { x: number; y: number }>();
+    for (const [id, pos] of dragPlacementPreviewRef.current) previewPlacements.set(id, pos);
+
+    const placementsByLayer = new Map<string, PlacedAsset[]>();
+    const visiblePlacements = getVisiblePlacements(
+      placements.map((placement) => ({
+        ...placement,
+        x: previewPlacements.get(placement.id)?.x ?? placement.x,
+        y: previewPlacements.get(placement.id)?.y ?? placement.y,
+      })),
+      viewport
+    );
+
+    for (const placement of visiblePlacements) {
+      const current = placementsByLayer.get(placement.layerId) ?? [];
+      current.push(placement);
+      placementsByLayer.set(placement.layerId, current);
+    }
 
     for (const layer of sortedLayers) {
       if (!layer.visible) continue;
 
-      const layerPlacements = placements.filter((p) => p.layerId === layer.id);
+      const layerPlacements = placementsByLayer.get(layer.id) ?? [];
 
       for (const p of layerPlacements) {
         const asset = assetMap.get(p.assetId);
         if (!asset) continue;
 
+        const shouldRenderDetail = renderScale >= 0.75;
         const screenX = (p.x - camera.x) * camera.zoom + centerX;
         const screenY = (p.y - camera.y) * camera.zoom + centerY;
 
@@ -410,17 +670,17 @@ export default function MapToolsWorkspace({
         const combinedOpacity = Math.max(0, Math.min(1, layerOpacity * placementOpacity));
 
         // Draw pixel art asset with native or scaled dimensions
-        drawAssetToContext(ctx, asset, screenX, screenY, camera.zoom, combinedOpacity, p.width, p.height);
+        drawAssetToContext(ctx, asset, screenX, screenY, camera.zoom, combinedOpacity, p.width, p.height, p.rotation ?? 0);
 
         // Render collision geometry overlay if set
-        if (p.collisionMode === "blocked") {
+        if (shouldRenderDetail && p.collisionMode === "blocked") {
           // Full bounding box blocked
           ctx.fillStyle = "rgba(239, 68, 68, 0.35)";
           ctx.fillRect(screenX, screenY, p.width * camera.zoom, p.height * camera.zoom);
           ctx.strokeStyle = "#ef4444";
           ctx.lineWidth = 1.5;
           ctx.strokeRect(screenX, screenY, p.width * camera.zoom, p.height * camera.zoom);
-        } else if (p.collision && p.collisionMode !== "walkable") {
+        } else if (shouldRenderDetail && p.collision && p.collisionMode !== "walkable") {
           const collScreenX = screenX + p.collision.x * camera.zoom;
           const collScreenY = screenY + p.collision.y * camera.zoom;
           const collW = p.collision.width * camera.zoom;
@@ -437,7 +697,7 @@ export default function MapToolsWorkspace({
         const isSelected = selectedPlacementIds.includes(p.id);
         const isPrimarySelected = selectedPlacementId === p.id;
 
-        if (isSelected) {
+        if (shouldRenderDetail && isSelected) {
           ctx.save();
           ctx.strokeStyle = isPrimarySelected ? "#22d3ee" : "#38bdf8"; // Cyan
           ctx.lineWidth = isPrimarySelected ? 2 : 1.5;
@@ -477,8 +737,10 @@ export default function MapToolsWorkspace({
       }
     }
 
+    const visibleBlockedAreas = getVisibleBlockedAreas(blockedAreas, viewport);
+
     // Render Blocked Areas (with support for Rectangle, Circle/Ellipse, and Polygon shapes)
-    for (const b of blockedAreas) {
+    for (const b of visibleBlockedAreas) {
       const bScreenX = (b.x - camera.x) * camera.zoom + centerX;
       const bScreenY = (b.y - camera.y) * camera.zoom + centerY;
       const bW = b.width * camera.zoom;
@@ -643,11 +905,12 @@ export default function MapToolsWorkspace({
     ) {
       const targetW = activeAsset.canvas_width;
       const targetH = activeAsset.canvas_height;
-      const snapped = snapCoords(
+      const snapped = resolvePlacementCoordinates(
         mouseWorldPos.current.x,
         mouseWorldPos.current.y,
         targetW,
-        targetH
+        targetH,
+        activeLayer.id
       );
       const previewScreenX = (snapped.x - camera.x) * camera.zoom + centerX;
       const previewScreenY = (snapped.y - camera.y) * camera.zoom + centerY;
@@ -669,6 +932,7 @@ export default function MapToolsWorkspace({
     camera,
     layers,
     placements,
+    resolvePlacementCoordinates,
     selectedPlacementId,
     selectedPlacementIds,
     selectedBlockedId,
@@ -681,20 +945,23 @@ export default function MapToolsWorkspace({
     activeAsset,
     activeLayerId,
     assetMap,
-    snapCoords,
   ]);
 
-  // Request Animation Frame loop for smooth rendering
-  useEffect(() => {
-    let animId: number;
-    const loop = () => {
+  const scheduleRender = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (renderQueuedRef.current) return;
+    renderQueuedRef.current = true;
+    window.requestAnimationFrame(() => {
+      renderQueuedRef.current = false;
       renderWorkspace();
-      animId = requestAnimationFrame(loop);
-    };
-    animId = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(animId);
+    });
   }, [renderWorkspace]);
 
+  // Draw only when the map state actually changes to avoid re-drawing the full canvas
+  // on every pointer or selection update while the camera and world stay stable.
+  useEffect(() => {
+    scheduleRender();
+  }, [scheduleRender]);
   // Resize canvas to match container
   useEffect(() => {
     const handleResize = () => {
@@ -712,7 +979,30 @@ export default function MapToolsWorkspace({
   // Keyboard Shortcuts (Space for Pan, Escape for Cancel, Delete for Remove, Ctrl+D for Duplicate)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      const target = e.target as HTMLElement | null;
+      const isTextInput = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+      const currentPlacements = placementsRef.current;
+      const currentSelectedPlacementIds = selectedPlacementIdsRef.current;
+      const currentSelectedBlockedId = selectedBlockedIdRef.current;
+      const currentActiveLayerId = activeLayerIdRef.current;
+      const currentBlockedAreas = blockedAreasRef.current;
+
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "z" || e.key.toLowerCase() === "y")) {
+        if (isTextInput) return;
+        e.preventDefault();
+        if (e.key.toLowerCase() === "z") {
+          if (e.shiftKey) {
+            handleRedo();
+          } else {
+            handleUndo();
+          }
+        } else {
+          handleRedo();
+        }
+        return;
+      }
+
+      if (isTextInput) {
         return;
       }
 
@@ -722,60 +1012,61 @@ export default function MapToolsWorkspace({
         e.preventDefault();
       }
 
-      // V for Select, B for Place, H for Pan, K for Block Area, S for Spawn, X or Delete for Delete tool
       if (e.key === "v" || e.key === "V") setToolMode("select");
       if (e.key === "b" || e.key === "B") setToolMode("place");
       if (e.key === "h" || e.key === "H") setToolMode("pan");
       if (e.key === "k" || e.key === "K") setToolMode("block");
       if (e.key === "x" || e.key === "X") setToolMode("delete");
 
-      // Delete selected placements or blocked area (only if on active layer)
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedPlacementIds.length > 0) {
-          const toDelete = new Set(selectedPlacementIds);
-          setPlacements((prev) =>
-            prev.filter((p) => {
-              if (toDelete.has(p.id) && p.layerId === activeLayerId) {
-                return false;
-              }
-              return true;
-            })
-          );
+        if (currentSelectedPlacementIds.length > 0) {
+          const before = captureMapSnapshot();
+          const toDelete = new Set(currentSelectedPlacementIds);
+          const nextPlacements = currentPlacements.filter((p) => {
+            if (toDelete.has(p.id) && p.layerId === currentActiveLayerId) {
+              return false;
+            }
+            return true;
+          });
+          setPlacements(nextPlacements);
           setSelectedPlacementIds([]);
+          commitHistoryEntry(before, { ...before, placements: nextPlacements });
           setSaveStatus({ message: `${toDelete.size} tile(s) removed from map.`, type: "info" });
           setTimeout(() => setSaveStatus(null), 2000);
         }
-        if (selectedBlockedId) {
-          setBlockedAreas((prev) => prev.filter((b) => b.id !== selectedBlockedId));
+        if (currentSelectedBlockedId) {
+          const before = captureMapSnapshot();
+          const nextBlockedAreas = currentBlockedAreas.filter((b) => b.id !== currentSelectedBlockedId);
+          setBlockedAreas(nextBlockedAreas);
           setSelectedBlockedId(null);
+          commitHistoryEntry(before, { ...before, blockedAreas: nextBlockedAreas });
         }
       }
 
-      // Keyboard Arrow Keys for 1-pixel precision nudge movement for ALL selected placements
       if (
         (e.key === "ArrowLeft" ||
           e.key === "ArrowRight" ||
           e.key === "ArrowUp" ||
           e.key === "ArrowDown") &&
-        selectedPlacementIds.length > 0
+        currentSelectedPlacementIds.length > 0
       ) {
         e.preventDefault();
+        const before = captureMapSnapshot();
         const dx = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
         const dy = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
-        setPlacements((prev) =>
-          prev.map((p) => {
-            if (!selectedPlacementIds.includes(p.id) || p.layerId !== activeLayerId) return p;
-            return {
-              ...p,
-              x: p.x + dx,
-              y: p.y + dy,
-            };
-          })
-        );
+        const nextPlacements = currentPlacements.map((p) => {
+          if (!currentSelectedPlacementIds.includes(p.id) || p.layerId !== currentActiveLayerId) return p;
+          return {
+            ...p,
+            x: p.x + dx,
+            y: p.y + dy,
+          };
+        });
+        setPlacements(nextPlacements);
+        commitHistoryEntry(before, { ...before, placements: nextPlacements });
         return;
       }
 
-      // Escape to deselect / cancel polygon drawing
       if (e.key === "Escape") {
         setSelectedPlacementIds([]);
         setSelectedBlockedId(null);
@@ -784,15 +1075,15 @@ export default function MapToolsWorkspace({
         setIsSavedMapsOpen(false);
       }
 
-      // Duplicate all selected placements (Ctrl+D / Cmd+D)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
         e.preventDefault();
-        if (selectedPlacementIds.length > 0) {
+        if (currentSelectedPlacementIds.length > 0) {
+          const before = captureMapSnapshot();
           const newDuplicated: PlacedAsset[] = [];
           const newIds: string[] = [];
-          for (const id of selectedPlacementIds) {
-            const target = placements.find((p) => p.id === id);
-            if (target && target.layerId === activeLayerId) {
+          for (const id of currentSelectedPlacementIds) {
+            const target = currentPlacements.find((p) => p.id === id);
+            if (target && target.layerId === currentActiveLayerId) {
               const dup: PlacedAsset = {
                 ...target,
                 id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -804,8 +1095,10 @@ export default function MapToolsWorkspace({
             }
           }
           if (newDuplicated.length > 0) {
-            setPlacements((prev) => [...prev, ...newDuplicated]);
+            const nextPlacements = [...currentPlacements, ...newDuplicated];
+            setPlacements(nextPlacements);
             setSelectedPlacementIds(newIds);
+            commitHistoryEntry(before, { ...before, placements: nextPlacements });
           }
         }
       }
@@ -825,7 +1118,7 @@ export default function MapToolsWorkspace({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [placements, selectedPlacementId, selectedPlacementIds, selectedBlockedId, activeLayerId]);
+  }, [captureMapSnapshot, commitHistoryEntry, handleRedo, handleUndo]);
 
   // Pointer Down Handler
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -851,12 +1144,15 @@ export default function MapToolsWorkspace({
 
     // 1. SPAWN MODE: Place Enemy Spawn
     if (toolMode === "spawn") {
-      setEnemySpawn({
+      const before = captureMapSnapshot();
+      const nextSpawn = {
         x: Math.round(world.x),
         y: Math.round(world.y),
         home_x: Math.round(world.x),
         home_y: Math.round(world.y),
-      });
+      };
+      setEnemySpawn(nextSpawn);
+      commitHistoryEntry(before, { ...before, enemySpawn: nextSpawn });
       setSaveStatus({ message: "Enemy spawn point placed!", type: "info" });
       setTimeout(() => setSaveStatus(null), 2500);
       return;
@@ -889,9 +1185,12 @@ export default function MapToolsWorkspace({
               label: "Blocked Polygon",
               layerId: activeLayer?.group === "blocked" ? activeLayer.id : undefined,
             };
-            setBlockedAreas((prev) => [...prev, newBlocked]);
+            const before = captureMapSnapshot();
+            const nextBlockedAreas = [...blockedAreas, newBlocked];
+            setBlockedAreas(nextBlockedAreas);
             setSelectedBlockedId(newBlocked.id);
             setPolygonPoints([]);
+            commitHistoryEntry(before, { ...before, blockedAreas: nextBlockedAreas });
             setSaveStatus({ message: "Custom polygon blocked area created!", type: "info" });
             setTimeout(() => setSaveStatus(null), 2500);
             return;
@@ -919,6 +1218,16 @@ export default function MapToolsWorkspace({
       if (hitBlocked) {
         setSelectedBlockedId(hitBlocked.id);
         setSelectedPlacementIds([]);
+        isDraggingBlocked.current = true;
+        beginHistorySegment();
+        dragBlockedStart.current = { id: hitBlocked.id, x: world.x, y: world.y };
+        const block = blockedAreas.find((b) => b.id === hitBlocked.id);
+        if (block) {
+          dragBlockedOffset.current = {
+            dx: world.x - block.x,
+            dy: world.y - block.y,
+          };
+        }
         return;
       }
       setSelectedBlockedId(null);
@@ -972,6 +1281,7 @@ export default function MapToolsWorkspace({
         }
 
         isDraggingPlacement.current = true;
+        beginHistorySegment();
         dragPlacementOffset.current = {
           dx: world.x - chosenPlacement.x,
           dy: world.y - chosenPlacement.y,
@@ -1006,8 +1316,11 @@ export default function MapToolsWorkspace({
       ));
 
       if (hit) {
-        setPlacements((prev) => prev.filter((p) => p.id !== hit.id));
+        const before = captureMapSnapshot();
+        const nextPlacements = placements.filter((p) => p.id !== hit.id);
+        setPlacements(nextPlacements);
         if (selectedPlacementId === hit.id) setSelectedPlacementId(null);
+        commitHistoryEntry(before, { ...before, placements: nextPlacements });
         setSaveStatus({ message: "Tile removed from map.", type: "info" });
         setTimeout(() => setSaveStatus(null), 2000);
         return;
@@ -1018,8 +1331,11 @@ export default function MapToolsWorkspace({
         world.x >= b.x && world.x <= b.x + b.width && world.y >= b.y && world.y <= b.y + b.height
       ));
       if (hitBlocked) {
-        setBlockedAreas((prev) => prev.filter((b) => b.id !== hitBlocked.id));
+        const before = captureMapSnapshot();
+        const nextBlockedAreas = blockedAreas.filter((b) => b.id !== hitBlocked.id);
+        setBlockedAreas(nextBlockedAreas);
         if (selectedBlockedId === hitBlocked.id) setSelectedBlockedId(null);
+        commitHistoryEntry(before, { ...before, blockedAreas: nextBlockedAreas });
         setSaveStatus({ message: "Blocked area removed.", type: "info" });
         setTimeout(() => setSaveStatus(null), 2000);
         return;
@@ -1041,11 +1357,12 @@ export default function MapToolsWorkspace({
         return;
       }
 
-      const snapped = snapCoords(
+      const snapped = resolvePlacementCoordinates(
         world.x,
         world.y,
         activeAsset.canvas_width,
-        activeAsset.canvas_height
+        activeAsset.canvas_height,
+        activeLayer.id
       );
 
       // Auto-assign collision box and collision mode based on layer group & asset category
@@ -1085,7 +1402,10 @@ export default function MapToolsWorkspace({
         occlusionDepth: activeAsset.canvas_height,
       };
 
-      setPlacements((prev) => [...prev, newPlacement]);
+      const before = captureMapSnapshot();
+      const nextPlacements = [...placements, newPlacement];
+      setPlacements(nextPlacements);
+      commitHistoryEntry(before, { ...before, placements: nextPlacements });
     }
   };
 
@@ -1093,6 +1413,9 @@ export default function MapToolsWorkspace({
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const world = screenToWorld(e.clientX, e.clientY);
     mouseWorldPos.current = world;
+
+    // Keep the placement preview aligned to the cursor without forcing a full redraw loop.
+    scheduleRender();
 
     // Update Marquee Box if dragging
     if (isMarqueeActive.current) {
@@ -1129,19 +1452,27 @@ export default function MapToolsWorkspace({
       const deltaY = snapped.y - primaryPlacement.y;
 
       if (deltaX !== 0 || deltaY !== 0) {
-        setPlacements((prev) =>
-          prev.map((p) => {
-            if (selectedPlacementIds.includes(p.id)) {
-              return {
-                ...p,
-                x: p.x + deltaX,
-                y: p.y + deltaY,
-              };
-            }
-            return p;
-          })
-        );
+        const nextMap = new Map<string, { x: number; y: number }>();
+        for (const id of selectedPlacementIds) {
+          const p = placements.find((entry) => entry.id === id);
+          if (!p) continue;
+          const targetX = p.x + deltaX;
+          const targetY = p.y + deltaY;
+          nextMap.set(id, { x: targetX, y: targetY });
+        }
+        dragPlacementPreviewRef.current = nextMap;
+        scheduleRender();
       }
+    }
+
+    if (isDraggingBlocked.current && selectedBlockedId) {
+      const block = blockedAreas.find((b) => b.id === selectedBlockedId);
+      if (!block) return;
+      const nextX = world.x - dragBlockedOffset.current.dx;
+      const nextY = world.y - dragBlockedOffset.current.dy;
+      setBlockedAreas((prev) =>
+        prev.map((b) => (b.id === selectedBlockedId ? { ...b, x: nextX, y: nextY } : b))
+      );
     }
   };
 
@@ -1154,6 +1485,22 @@ export default function MapToolsWorkspace({
     }
     isPanning.current = false;
     isDraggingPlacement.current = false;
+    isDraggingBlocked.current = false;
+    if (dragPlacementPreviewRef.current.size > 0) {
+      const before = captureMapSnapshot();
+      const nextPlacements = placements.map((p) => {
+        const preview = dragPlacementPreviewRef.current.get(p.id);
+        if (!preview) return p;
+        return { ...p, x: preview.x, y: preview.y };
+      });
+      setPlacements(nextPlacements);
+      commitHistoryEntry(before, { ...before, placements: nextPlacements });
+      dragPlacementPreviewRef.current.clear();
+    }
+
+    if (transientHistoryRef.current) {
+      endHistorySegment();
+    }
 
     // Finish Marquee Box selection
     if (isMarqueeActive.current && marqueeBox) {
@@ -1195,6 +1542,7 @@ export default function MapToolsWorkspace({
       const bH = Math.abs(Math.round(world.y) - blockedBoxStart.current.y);
 
       if (bW >= 8 && bH >= 8) {
+        const before = captureMapSnapshot();
         const activeLayer = layers.find((l) => l.id === activeLayerId);
         const newBlocked: BlockedArea = {
           id: `b_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -1206,8 +1554,10 @@ export default function MapToolsWorkspace({
           label: blockedShapeMode === "circle" ? "Blocked Circle" : "Blocked",
           layerId: activeLayer?.group === "blocked" ? activeLayer.id : undefined,
         };
-        setBlockedAreas((prev) => [...prev, newBlocked]);
+        const nextBlockedAreas = [...blockedAreas, newBlocked];
+        setBlockedAreas(nextBlockedAreas);
         setSelectedBlockedId(newBlocked.id);
+        commitHistoryEntry(before, { ...before, blockedAreas: nextBlockedAreas });
         setSaveStatus({ message: `${blockedShapeMode === "circle" ? "Circular" : "Rectangular"} collision area marked!`, type: "info" });
         setTimeout(() => setSaveStatus(null), 2500);
       }
@@ -1242,6 +1592,14 @@ export default function MapToolsWorkspace({
     setCamera((prev) => ({ ...prev, zoom: Math.min(10, Number((prev.zoom * 1.25).toFixed(3))) }));
   };
 
+  const handlePlacementTransform = (mode: "horizontal" | "vertical" | "rotate-left" | "rotate-right" | "reset-rotation") => {
+    if (!selectedPlacementIds.length) return;
+    const before = captureMapSnapshot();
+    const nextPlacements = transformPlacementSelection(placements, selectedPlacementIds, mode);
+    setPlacements(nextPlacements);
+    commitHistoryEntry(before, { ...before, placements: nextPlacements });
+  };
+
   const handleZoomOut = () => {
     setCamera((prev) => ({ ...prev, zoom: Math.max(0.25, Number((prev.zoom * 0.8).toFixed(3))) }));
   };
@@ -1268,71 +1626,84 @@ export default function MapToolsWorkspace({
 
   // Layer Management Handlers
   const handleAddLayer = (group: LayerGroupType = "ground") => {
-    const groupCount = layers.filter((l) => (l.group || (l.id.includes("ground") ? "ground" : "objects")) === group).length;
+    const normalizedGroup = normalizeLayerGroup(group);
+    const groupCount = layers.filter((l) => normalizeLayerGroup(l) === normalizedGroup).length;
     const nextOrder = layers.length ? Math.max(...layers.map((l) => l.order)) + 1 : 0;
-    const groupLabel = group === "ground" ? "Ground" : "Objects";
+    const groupLabel = normalizedGroup === "ground" ? "Ground" : normalizedGroup === "blocked" ? "Blocked" : "Buildings & Trees";
     const newLayer: MapLayer = {
-      id: `layer_${group}_${Date.now()}`,
+      id: `layer_${normalizedGroup}_${Date.now()}`,
       name: `${groupLabel} Layer ${groupCount + 1}`,
       visible: true,
       locked: false,
       order: nextOrder,
-      group,
+      group: normalizedGroup,
     };
-    setLayers((prev) => [...prev, newLayer]);
+    const before = captureMapSnapshot();
+    const nextLayers = [...layers, newLayer];
+    setLayers(nextLayers);
     setActiveLayerId(newLayer.id);
+    commitHistoryEntry(before, { ...before, layers: nextLayers });
   };
 
   const handleRenameLayer = (layerId: string, newName: string) => {
-    setLayers((prev) =>
-      prev.map((l) => (l.id === layerId ? { ...l, name: newName } : l))
-    );
+    const before = captureMapSnapshot();
+    const nextLayers = layers.map((l) => (l.id === layerId ? { ...l, name: newName } : l));
+    setLayers(nextLayers);
+    commitHistoryEntry(before, { ...before, layers: nextLayers });
   };
 
   const handleToggleVisible = (layerId: string) => {
-    setLayers((prev) =>
-      prev.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l))
-    );
+    const before = captureMapSnapshot();
+    const nextLayers = layers.map((l) => (l.id === layerId ? { ...l, visible: !l.visible } : l));
+    setLayers(nextLayers);
+    commitHistoryEntry(before, { ...before, layers: nextLayers });
   };
 
   const handleToggleLock = (layerId: string) => {
-    setLayers((prev) =>
-      prev.map((l) => (l.id === layerId ? { ...l, locked: !l.locked } : l))
-    );
+    const before = captureMapSnapshot();
+    const nextLayers = layers.map((l) => (l.id === layerId ? { ...l, locked: !l.locked } : l));
+    setLayers(nextLayers);
+    commitHistoryEntry(before, { ...before, layers: nextLayers });
   };
 
   const handleMoveLayer = (layerId: string, direction: "up" | "down") => {
     const current = layers.find((l) => l.id === layerId);
     if (!current) return;
-    const currentGroup = current.group || (current.id.includes("ground") ? "ground" : "objects");
+    const currentGroup = normalizeLayerGroup(current);
 
-    // Only swap with layers in the SAME group
     const groupLayers = [...layers]
-      .filter((l) => (l.group || (l.id.includes("ground") ? "ground" : "objects")) === currentGroup)
-      .sort((a, b) => b.order - a.order);
+      .filter((l) => normalizeLayerGroup(l) === currentGroup)
+      .sort((a, b) => a.order - b.order);
 
     const idx = groupLayers.findIndex((l) => l.id === layerId);
     if (idx < 0) return;
     const targetIdx = direction === "up" ? idx - 1 : idx + 1;
     if (targetIdx < 0 || targetIdx >= groupLayers.length) return;
 
-    // Swap orders
     const targetLayer = groupLayers[targetIdx];
-    const tempOrder = current.order;
-    current.order = targetLayer.order;
-    targetLayer.order = tempOrder;
+    const before = captureMapSnapshot();
+    const nextLayers = layers.map((l) => {
+      if (l.id === current.id) return { ...l, order: targetLayer.order, group: currentGroup };
+      if (l.id === targetLayer.id) return { ...l, order: current.order, group: currentGroup };
+      return l;
+    });
 
-    setLayers([...layers]);
+    setLayers(nextLayers);
+    commitHistoryEntry(before, { ...before, layers: nextLayers });
   };
 
   const handleDeleteLayer = (layerId: string) => {
     if (layers.length <= 1) return;
-    setLayers((prev) => prev.filter((l) => l.id !== layerId));
-    setPlacements((prev) => prev.filter((p) => p.layerId !== layerId));
+    const before = captureMapSnapshot();
+    const nextLayers = layers.filter((l) => l.id !== layerId);
+    const nextPlacements = placements.filter((p) => p.layerId !== layerId);
+    setLayers(nextLayers);
+    setPlacements(nextPlacements);
     if (activeLayerId === layerId) {
       const remaining = layers.filter((l) => l.id !== layerId);
       setActiveLayerId(remaining[0].id);
     }
+    commitHistoryEntry(before, { ...before, layers: nextLayers, placements: nextPlacements });
   };
 
   const handleSelectLayer = (id: string) => {
@@ -1358,18 +1729,19 @@ export default function MapToolsWorkspace({
 
     if (isReplacingPlacement && selectedPlacementId) {
       // Replace asset on selected placement while preserving original position
-      setPlacements((prev) =>
-        prev.map((p) =>
-          p.id === selectedPlacementId
-            ? {
-                ...p,
-                assetId: asset.id,
-                width: asset.canvas_width,
-                height: asset.canvas_height,
-              }
-            : p
-        )
+      const before = captureMapSnapshot();
+      const nextPlacements = placements.map((p) =>
+        p.id === selectedPlacementId
+          ? {
+              ...p,
+              assetId: asset.id,
+              width: asset.canvas_width,
+              height: asset.canvas_height,
+            }
+          : p
       );
+      setPlacements(nextPlacements);
+      commitHistoryEntry(before, { ...before, placements: nextPlacements });
       setIsReplacingPlacement(false);
       setIsAssetPickerOpen(false);
       return;
@@ -1422,7 +1794,7 @@ export default function MapToolsWorkspace({
       // Ensure all loaded layers have explicit group property
       const loadedLayers = (data.layers?.length ? data.layers : DEFAULT_LAYERS).map((l) => ({
         ...l,
-        group: l.group || (l.id.includes("ground") || l.name.toLowerCase().includes("ground") ? "ground" : "objects") as LayerGroupType,
+        group: normalizeLayerGroup(l) as LayerGroupType,
       }));
       setLayers(loadedLayers);
       setActiveLayerId(loadedLayers[0]?.id || "layer_ground");
@@ -1430,6 +1802,19 @@ export default function MapToolsWorkspace({
       setBlockedAreas(data.blockedAreas || []);
       if (data.enemySpawn) setEnemySpawn(data.enemySpawn);
       if (data.camera) setCamera(data.camera);
+      resetHistory({
+        mapId: data.id,
+        mapName: data.name || "Untitled Map",
+        mapCreatedAt: data.created_at,
+        mapPublished: data.is_published ?? false,
+        mapDefault: data.is_default ?? false,
+        bounds: data.bounds,
+        layers: loadedLayers,
+        placements: data.placements || [],
+        blockedAreas: data.blockedAreas || [],
+        enemySpawn: data.enemySpawn || { x: 3200, y: 3200, home_x: 3200, home_y: 3200 },
+        camera: data.camera || { x: 0, y: 0, zoom: 2 },
+      });
       setSelectedPlacementId(null);
       setSelectedBlockedId(null);
       setSaveStatus({ message: `Loaded map: ${data.name}`, type: "success" });
@@ -1444,19 +1829,22 @@ export default function MapToolsWorkspace({
   };
 
   const handleNewMap = () => {
-    setMapId(createMapId());
-    setMapName("Untitled Map");
-    setMapCreatedAt(new Date().toISOString());
-    setMapPublished(false);
-    setMapDefault(false);
-    setBounds(undefined);
-    setLayers(DEFAULT_LAYERS);
-    setActiveLayerId("layer_ground");
-    setPlacements([]);
-    setBlockedAreas([]);
+    const newSnapshot: MapHistorySnapshot = {
+      mapId: createMapId(),
+      mapName: "Untitled Map",
+      mapCreatedAt: new Date().toISOString(),
+      mapPublished: false,
+      mapDefault: false,
+      bounds: undefined,
+      layers: DEFAULT_LAYERS,
+      placements: [],
+      blockedAreas: [],
+      enemySpawn: { x: 3200, y: 3200, home_x: 3200, home_y: 3200 },
+      camera: { x: 0, y: 0, zoom: 2 },
+    };
+    resetHistory(newSnapshot);
     setSelectedPlacementId(null);
     setSelectedBlockedId(null);
-    setCamera({ x: 0, y: 0, zoom: 2 });
     setSaveStatus({ message: "New empty map created.", type: "info" });
     setTimeout(() => setSaveStatus(null), 2500);
   };
@@ -1638,6 +2026,31 @@ export default function MapToolsWorkspace({
 
           <div className="mx-1 h-4 w-px bg-slate-700" />
 
+          <div className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/80 p-0.5">
+            <button
+              type="button"
+              onClick={handleUndo}
+              disabled={!historyState.canUndo}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+              title="Undo (Ctrl+Z)"
+              aria-label="Undo"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleRedo}
+              disabled={!historyState.canRedo}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-300 transition hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+              title="Redo (Ctrl+Y)"
+              aria-label="Redo"
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="mx-1 h-4 w-px bg-slate-700" />
+
           {/* Dedicated Tiles & Objects Button */}
           <button
             type="button"
@@ -1675,6 +2088,19 @@ export default function MapToolsWorkspace({
             }`}
           >
             Snap: {snapToGrid ? "On" : "Off"}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setNonOverwritePlacement((v) => !v)}
+            title="Avoid overwriting existing tiles by placing adjacent when collision is found"
+            className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition ${
+              nonOverwritePlacement
+                ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300"
+                : "border-slate-700 bg-slate-800 text-slate-400"
+            }`}
+          >
+            Non-Overwrite Placement: {nonOverwritePlacement ? "On" : "Off"}
           </button>
 
           {/* Zoom controls */}
@@ -1880,6 +2306,15 @@ export default function MapToolsWorkspace({
               </span>
               <div className="h-4 w-px bg-slate-700 mx-1" />
 
+              <div className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/90 px-2 py-0.5">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Transform:</span>
+                <button type="button" onClick={() => handlePlacementTransform("horizontal")} className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700" title="Flip horizontal">↔</button>
+                <button type="button" onClick={() => handlePlacementTransform("vertical")} className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700" title="Flip vertical">↕</button>
+                <button type="button" onClick={() => handlePlacementTransform("rotate-left")} className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700" title="Rotate left">↺</button>
+                <button type="button" onClick={() => handlePlacementTransform("rotate-right")} className="rounded px-1.5 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700" title="Rotate right">↻</button>
+                <button type="button" onClick={() => handlePlacementTransform("reset-rotation")} className="rounded px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-slate-700" title="Reset rotation">0°</button>
+              </div>
+
               {/* Scale / Dimensions Controls (Task 2) */}
               <div className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-800/90 px-2 py-0.5">
                 <span className="text-[10px] uppercase font-bold text-slate-400">Size:</span>
@@ -1889,18 +2324,19 @@ export default function MapToolsWorkspace({
                   max="1024"
                   value={activePlacement.width}
                   onChange={(e) => {
+                    const before = captureMapSnapshot();
                     const nextW = Math.max(1, parseInt(e.target.value) || 1);
-                    setPlacements((prev) =>
-                      prev.map((p) => {
-                        if (p.id !== activePlacement.id) return p;
-                        const origW = p.width;
-                        const origH = p.height;
-                        const nextH = proportionalScale && origW > 0
-                          ? Math.max(1, Math.round((origH / origW) * nextW))
-                          : origH;
-                        return { ...p, width: nextW, height: nextH };
-                      })
-                    );
+                    const nextPlacements = placements.map((p) => {
+                      if (p.id !== activePlacement.id) return p;
+                      const origW = p.width;
+                      const origH = p.height;
+                      const nextH = proportionalScale && origW > 0
+                        ? Math.max(1, Math.round((origH / origW) * nextW))
+                        : origH;
+                      return { ...p, width: nextW, height: nextH };
+                    });
+                    setPlacements(nextPlacements);
+                    commitHistoryEntry(before, { ...before, placements: nextPlacements });
                   }}
                   className="w-12 rounded bg-slate-950 px-1 py-0.5 text-center font-mono text-xs text-cyan-300 outline-none border border-slate-700 focus:border-cyan-400"
                   title="Width in exact pixels"
@@ -1912,18 +2348,19 @@ export default function MapToolsWorkspace({
                   max="1024"
                   value={activePlacement.height}
                   onChange={(e) => {
+                    const before = captureMapSnapshot();
                     const nextH = Math.max(1, parseInt(e.target.value) || 1);
-                    setPlacements((prev) =>
-                      prev.map((p) => {
-                        if (p.id !== activePlacement.id) return p;
-                        const origW = p.width;
-                        const origH = p.height;
-                        const nextW = proportionalScale && origH > 0
-                          ? Math.max(1, Math.round((origW / origH) * nextH))
-                          : origW;
-                        return { ...p, width: nextW, height: nextH };
-                      })
-                    );
+                    const nextPlacements = placements.map((p) => {
+                      if (p.id !== activePlacement.id) return p;
+                      const origW = p.width;
+                      const origH = p.height;
+                      const nextW = proportionalScale && origH > 0
+                        ? Math.max(1, Math.round((origW / origH) * nextH))
+                        : origW;
+                      return { ...p, width: nextW, height: nextH };
+                    });
+                    setPlacements(nextPlacements);
+                    commitHistoryEntry(before, { ...before, placements: nextPlacements });
                   }}
                   className="w-12 rounded bg-slate-950 px-1 py-0.5 text-center font-mono text-xs text-cyan-300 outline-none border border-slate-700 focus:border-cyan-400"
                   title="Height in exact pixels"
@@ -1948,9 +2385,10 @@ export default function MapToolsWorkspace({
                 <button
                   type="button"
                   onClick={() => {
-                    setPlacements((prev) =>
-                      prev.map((p) => (p.id === activePlacement.id ? { ...p, x: p.x - 1 } : p))
-                    );
+                    const before = captureMapSnapshot();
+                    const nextPlacements = placements.map((p) => (p.id === activePlacement.id ? { ...p, x: p.x - 1 } : p));
+                    setPlacements(nextPlacements);
+                    commitHistoryEntry(before, { ...before, placements: nextPlacements });
                   }}
                   className="rounded p-1 text-slate-300 hover:bg-slate-700 hover:text-white"
                   title="Nudge 1px Left (ArrowLeft)"
@@ -1960,9 +2398,10 @@ export default function MapToolsWorkspace({
                 <button
                   type="button"
                   onClick={() => {
-                    setPlacements((prev) =>
-                      prev.map((p) => (p.id === activePlacement.id ? { ...p, x: p.x + 1 } : p))
-                    );
+                    const before = captureMapSnapshot();
+                    const nextPlacements = placements.map((p) => (p.id === activePlacement.id ? { ...p, x: p.x + 1 } : p));
+                    setPlacements(nextPlacements);
+                    commitHistoryEntry(before, { ...before, placements: nextPlacements });
                   }}
                   className="rounded p-1 text-slate-300 hover:bg-slate-700 hover:text-white"
                   title="Nudge 1px Right (ArrowRight)"
@@ -1972,9 +2411,10 @@ export default function MapToolsWorkspace({
                 <button
                   type="button"
                   onClick={() => {
-                    setPlacements((prev) =>
-                      prev.map((p) => (p.id === activePlacement.id ? { ...p, y: p.y - 1 } : p))
-                    );
+                    const before = captureMapSnapshot();
+                    const nextPlacements = placements.map((p) => (p.id === activePlacement.id ? { ...p, y: p.y - 1 } : p));
+                    setPlacements(nextPlacements);
+                    commitHistoryEntry(before, { ...before, placements: nextPlacements });
                   }}
                   className="rounded p-1 text-slate-300 hover:bg-slate-700 hover:text-white"
                   title="Nudge 1px Up (ArrowUp)"
@@ -1984,9 +2424,10 @@ export default function MapToolsWorkspace({
                 <button
                   type="button"
                   onClick={() => {
-                    setPlacements((prev) =>
-                      prev.map((p) => (p.id === activePlacement.id ? { ...p, y: p.y + 1 } : p))
-                    );
+                    const before = captureMapSnapshot();
+                    const nextPlacements = placements.map((p) => (p.id === activePlacement.id ? { ...p, y: p.y + 1 } : p));
+                    setPlacements(nextPlacements);
+                    commitHistoryEntry(before, { ...before, placements: nextPlacements });
                   }}
                   className="rounded p-1 text-slate-300 hover:bg-slate-700 hover:text-white"
                   title="Nudge 1px Down (ArrowDown)"
@@ -2088,14 +2529,17 @@ export default function MapToolsWorkspace({
               <button
                 type="button"
                 onClick={() => {
+                  const before = captureMapSnapshot();
                   const dup: PlacedAsset = {
                     ...activePlacement,
                     id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
                     x: activePlacement.x + activePlacement.width,
                     y: activePlacement.y,
                   };
-                  setPlacements((prev) => [...prev, dup]);
+                  const nextPlacements = [...placements, dup];
+                  setPlacements(nextPlacements);
                   setSelectedPlacementId(dup.id);
+                  commitHistoryEntry(before, { ...before, placements: nextPlacements });
                 }}
                 className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-slate-200 hover:bg-slate-700 transition"
                 title="Duplicate placement (Ctrl+D)"
@@ -2117,8 +2561,11 @@ export default function MapToolsWorkspace({
               <button
                 type="button"
                 onClick={() => {
-                  setPlacements((prev) => prev.filter((p) => p.id !== activePlacement.id));
+                  const before = captureMapSnapshot();
+                  const nextPlacements = placements.filter((p) => p.id !== activePlacement.id);
+                  setPlacements(nextPlacements);
                   setSelectedPlacementId(null);
+                  commitHistoryEntry(before, { ...before, placements: nextPlacements });
                 }}
                 className="rounded-lg border border-red-500/40 bg-red-950/40 px-2.5 py-1 text-red-300 hover:bg-red-900/60 transition"
                 title="Delete placement (Del)"
@@ -2149,8 +2596,11 @@ export default function MapToolsWorkspace({
               <button
                 type="button"
                 onClick={() => {
-                  setBlockedAreas((prev) => prev.filter((b) => b.id !== selectedBlockedId));
+                  const before = captureMapSnapshot();
+                  const nextBlockedAreas = blockedAreas.filter((b) => b.id !== selectedBlockedId);
+                  setBlockedAreas(nextBlockedAreas);
                   setSelectedBlockedId(null);
+                  commitHistoryEntry(before, { ...before, blockedAreas: nextBlockedAreas });
                 }}
                 className="rounded-lg bg-red-600 px-2.5 py-1 font-bold text-white hover:bg-red-500 transition"
               >
