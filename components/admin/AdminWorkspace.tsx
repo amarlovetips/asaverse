@@ -10,6 +10,8 @@ import MapToolsWorkspace from "./map/MapToolsWorkspace";
 import MapEditorWorkspace from "./map/MapEditorWorkspace";
 import TileObjectStudio from "./map/TileObjectStudio";
 import TileObjectListWorkspace from "./map/TileObjectListWorkspace";
+import TilesObjectsAnimationWorkspace from "./map/TilesObjectsAnimationWorkspace";
+import SpecialEventsWorkspace from "./map/SpecialEventsWorkspace";
 
 export default function AdminWorkspace({ active, routeRemainder = [] }: { active: string; routeRemainder?: string[] }) {
   const editor = active === "Pixel Art Studio" || active === "Appearance Editor";
@@ -34,12 +36,14 @@ export default function AdminWorkspace({ active, routeRemainder = [] }: { active
         <TileObjectStudio routeRemainder={routeRemainder} />
       ) : active === "Tiles & Object List" ? (
         <TileObjectListWorkspace routeRemainder={routeRemainder} />
+      ) : active === "Tiles & Objects Animation" ? (
+        <TilesObjectsAnimationWorkspace routeRemainder={routeRemainder} />
       ) : active === "Map Generator" ? (
         <MapToolsWorkspace routeRemainder={routeRemainder} />
       ) : active === "Map Editor" ? (
         <MapEditorWorkspace routeRemainder={routeRemainder} />
-      ) : active === "Collision & Spawns" ? (
-        <MapToolsWorkspace routeRemainder={routeRemainder} initialTool="block" />
+      ) : active === "Special Events" ? (
+        <SpecialEventsWorkspace />
       ) : editor ? (
         <PixelArtEditor />
       ) : (

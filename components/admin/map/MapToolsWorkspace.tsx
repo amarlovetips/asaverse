@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Undo2, Redo2 } from "lucide-react";
-import { fetchAllMapAssets, type AssetRecord } from "./lib/supabaseAssets";
-import { clearAssetRenderCaches, drawAssetToContext } from "./lib/assetRenderer";
+import { fetchAllMapAssets, getAssetAnimationSnapshot, type AssetRecord } from "./lib/supabaseAssets";
+import { clearAssetRenderCaches, drawMapGeneratorAssetToContext, getMapGeneratorAssetMetrics } from "./lib/assetRenderer";
 import {
   saveMap,
   loadMap,
@@ -669,8 +669,15 @@ export default function MapToolsWorkspace({
         const placementOpacity = p.opacity !== undefined ? p.opacity : 1;
         const combinedOpacity = Math.max(0, Math.min(1, layerOpacity * placementOpacity));
 
-        // Draw pixel art asset with native or scaled dimensions
-        drawAssetToContext(ctx, asset, screenX, screenY, camera.zoom, combinedOpacity, p.width, p.height, p.rotation ?? 0);
+        const placementAnimationEnabled = p.animationEnabled ?? asset.animation?.enabled ?? false;
+        const animatedAsset = {
+          ...asset,
+          animation: asset.animation ? { ...asset.animation, enabled: placementAnimationEnabled } : null,
+          pixel_data: getAssetAnimationSnapshot(asset, performance.now(), placementAnimationEnabled),
+        };
+
+        // Map-generator placements use the non-transparent visible bounds, keeping the original asset unchanged.
+        drawMapGeneratorAssetToContext(ctx, animatedAsset, screenX, screenY, camera.zoom, combinedOpacity, p.width, p.height, p.rotation ?? 0);
 
         // Render collision geometry overlay if set
         if (shouldRenderDetail && p.collisionMode === "blocked") {
@@ -903,8 +910,9 @@ export default function MapToolsWorkspace({
       activeLayer?.visible &&
       !activeLayer.locked
     ) {
-      const targetW = activeAsset.canvas_width;
-      const targetH = activeAsset.canvas_height;
+      const assetMetrics = getMapGeneratorAssetMetrics(activeAsset);
+      const targetW = assetMetrics.width;
+      const targetH = assetMetrics.height;
       const snapped = resolvePlacementCoordinates(
         mouseWorldPos.current.x,
         mouseWorldPos.current.y,
@@ -915,10 +923,14 @@ export default function MapToolsWorkspace({
       const previewScreenX = (snapped.x - camera.x) * camera.zoom + centerX;
       const previewScreenY = (snapped.y - camera.y) * camera.zoom + centerY;
 
-      // Draw ghosted asset
-      drawAssetToContext(ctx, activeAsset, previewScreenX, previewScreenY, camera.zoom, 0.65);
+      const hasAnimatedFrames = Array.isArray(activeAsset.animation?.frames) && activeAsset.animation.frames.length > 1;
+      const previewAsset = {
+        ...activeAsset,
+        animation: activeAsset.animation ? { ...activeAsset.animation, enabled: activeAsset.animation.enabled ?? hasAnimatedFrames } : null,
+        pixel_data: getAssetAnimationSnapshot(activeAsset, performance.now(), activeAsset.animation?.enabled ?? hasAnimatedFrames),
+      };
+      drawMapGeneratorAssetToContext(ctx, previewAsset, previewScreenX, previewScreenY, camera.zoom, 0.65, targetW, targetH, 0);
 
-      // Subtle placement boundary
       ctx.strokeStyle = "rgba(34, 211, 238, 0.8)";
       ctx.lineWidth = 1;
       ctx.strokeRect(
@@ -1357,11 +1369,12 @@ export default function MapToolsWorkspace({
         return;
       }
 
+      const placementMetrics = getMapGeneratorAssetMetrics(activeAsset);
       const snapped = resolvePlacementCoordinates(
         world.x,
         world.y,
-        activeAsset.canvas_width,
-        activeAsset.canvas_height,
+        placementMetrics.width,
+        placementMetrics.height,
         activeLayer.id
       );
 
@@ -1375,10 +1388,10 @@ export default function MapToolsWorkspace({
         initialCollisionMode = "walkable";
       } else if (cat === "tree") {
         // Bottom 40% represents trunk collision box (canopy remains walkable/covers characters)
-        const trunkH = Math.max(8, Math.round(activeAsset.canvas_height * 0.4));
-        const trunkW = Math.max(8, Math.round(activeAsset.canvas_width * 0.35));
-        const trunkX = Math.round((activeAsset.canvas_width - trunkW) / 2);
-        const trunkY = activeAsset.canvas_height - trunkH;
+        const trunkH = Math.max(8, Math.round(placementMetrics.height * 0.4));
+        const trunkW = Math.max(8, Math.round(placementMetrics.width * 0.35));
+        const trunkX = Math.round((placementMetrics.width - trunkW) / 2);
+        const trunkY = placementMetrics.height - trunkH;
         initialCollision = { x: trunkX, y: trunkY, width: trunkW, height: trunkH };
         initialCollisionMode = "custom";
       } else if (cat === "buildings" || cat === "stone" || cat === "obstacle" || cat === "wall") {
@@ -1388,18 +1401,20 @@ export default function MapToolsWorkspace({
         initialCollisionMode = "walkable";
       }
 
+      const hasAnimatedFrames = Array.isArray(activeAsset.animation?.frames) && activeAsset.animation.frames.length > 1;
       const newPlacement: PlacedAsset = {
         id: `p_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         assetId: activeAsset.id,
         name: activeAsset.name || undefined,
         x: snapped.x,
         y: snapped.y,
-        width: activeAsset.canvas_width,
-        height: activeAsset.canvas_height,
+        width: placementMetrics.width,
+        height: placementMetrics.height,
         layerId: activeLayer.id,
         collision: initialCollision,
         collisionMode: initialCollisionMode,
-        occlusionDepth: activeAsset.canvas_height,
+        animationEnabled: hasAnimatedFrames,
+        occlusionDepth: placementMetrics.height,
       };
 
       const before = captureMapSnapshot();

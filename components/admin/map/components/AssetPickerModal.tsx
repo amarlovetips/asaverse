@@ -290,6 +290,15 @@ export default function AssetPickerModal({
                           {asset.canvas_width}&times;{asset.canvas_height}
                         </span>
                       </div>
+                      {asset.animation && asset.animation.frames.length > 1 ? (
+                        <span className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200 ring-1 ring-amber-400/30">
+                          Animated
+                        </span>
+                      ) : (
+                        <span className="mt-1 inline-flex items-center rounded bg-slate-700/80 px-1.5 py-0.5 text-[9px] font-semibold text-slate-300 ring-1 ring-slate-600/60">
+                          Static
+                        </span>
+                      )}
                       {pixelCount === 0 && (
                         <span className="mt-1 inline-block text-[9px] text-amber-400/80">
                           (No pixels drawn)

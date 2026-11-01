@@ -3,7 +3,7 @@ export const menus = [
   { name: "Game World", icon: "◎", items: ["World Settings", "Regions & Villages", "Teleport Points", "World Events"] },
   { name: "Character Studio", icon: "♙", items: ["Characters", "GitHub Character", "Appearance Editor", "Walk Animations", "Character Limits"] },
   { name: "Equipment", icon: "◈", items: ["Equipments", "Equipment Studio", "Animation", "Effects"] },
-  { name: "Map Tools", icon: "▦", items: ["Map Generator", "Map Editor", "Tiles & Objects", "Tiles & Object List", "Collision & Spawns"] },
+  { name: "Map Tools", icon: "▦", items: ["Map Generator", "Map Editor", "Tiles & Objects", "Tiles & Object List", "Tiles & Objects Animation", "Special Events"] },
   { name: "Combat & AI", icon: "⚔", items: ["Enemies", "Enemy AI", "Battle Settings", "Bosses & Dungeons"] },
   { name: "Items & Economy", icon: "◇", items: ["Items", "Gold Coin", "Lust Coin", "Trading & Drops"] },
   { name: "Spells & Skills", icon: "✧", items: ["Spell Editor", "Skill Tree", "Cooldowns & Effects"] },

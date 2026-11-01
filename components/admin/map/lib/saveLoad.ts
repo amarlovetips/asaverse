@@ -30,6 +30,7 @@ export type PlacedAsset = {
   scaleY?: number;
   rotation?: number;
   opacity?: number; // 0 to 1, defaults to 1
+  animationEnabled?: boolean;
   layerId: string;
   collision?: CollisionRect | null;
   collisionMode?: CollisionMode;
